@@ -41,3 +41,6 @@ data/**
 *.xlsx
 *.xls
 *.tsv
+
+# Local model configuration should stay uncommitted.
+02_gemma4_generation/config/models.local.json

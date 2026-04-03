@@ -1,0 +1,7 @@
+[done] preprocessing complete
+[done] cleaned file: G:\GitProjects\New_Local_GPT_Chetbot\apartment_chatbot_cleaned.csv
+[done] qa base file: G:\GitProjects\New_Local_GPT_Chetbot\apartment_chatbot_qa_base.csv
+[done] report file: G:\GitProjects\New_Local_GPT_Chetbot\preprocessing_report.md
+[done] mapping file: G:\GitProjects\New_Local_GPT_Chetbot\apartment_column_mapping.csv
+[summary] original shape=(3296, 50), cleaned shape=(3239, 60), duplicates_removed=57
+[summary] address split success=3296, fail=0

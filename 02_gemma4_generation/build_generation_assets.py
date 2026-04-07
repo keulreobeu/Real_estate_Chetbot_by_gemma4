@@ -55,6 +55,11 @@ def main() -> None:
         "환승역여부",
         "description",
         "검색키워드",
+        "데이터기준일",
+        "질의매칭태그",
+        "공원_비교요약",
+        "병원_비교요약",
+        "교통_비교요약",
     ]
     source_index = main_df[selected_columns].copy()
     source_index["검색텍스트"] = source_index.apply(build_search_text, axis=1)

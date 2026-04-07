@@ -14,6 +14,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 QA_DIR = DATA_DIR / "qa"
 REPORT_DIR = PROJECT_ROOT / "00_Report"
 INPUT_FILE = DATA_DIR / "apartment_chatbot_v3.csv"
+INPUT_KNOWLEDGE = QA_DIR / "real_estate_knowledge_base.csv"
 OUTPUT_QA = QA_DIR / "apartment_qa_dataset.csv"
 OUTPUT_JSONL = QA_DIR / "apartment_finetune_dataset.jsonl"
 OUTPUT_EVAL = QA_DIR / "evaluation_dataset.csv"
@@ -31,7 +32,7 @@ def load_csv(path: Path) -> tuple[pd.DataFrame, str]:
             return pd.read_csv(path, encoding=encoding), encoding
         except Exception as exc:
             last_error = exc
-    raise RuntimeError(f"CSV를 읽지 못했습니다: {last_error}")
+    raise RuntimeError(f"CSV를 읽지 못했습니다: {path} ({last_error})")
 
 
 def is_missing(value: Any) -> bool:
@@ -40,6 +41,12 @@ def is_missing(value: Any) -> bool:
     if isinstance(value, str) and value.strip() in {"", "nan", "None", "NULL", "null"}:
         return True
     return False
+
+
+def safe_text(value: Any) -> str | None:
+    if is_missing(value):
+        return None
+    return str(value).strip()
 
 
 def fmt_int(value: Any) -> str | None:
@@ -57,12 +64,6 @@ def fmt_float(value: Any, digits: int = 1) -> str | None:
 def fmt_area(value: Any) -> str | None:
     area = fmt_float(value, 2)
     return f"{area}㎡" if area else None
-
-
-def safe_text(value: Any) -> str | None:
-    if is_missing(value):
-        return None
-    return str(value).strip()
 
 
 def build_location(row: pd.Series) -> str | None:
@@ -110,7 +111,7 @@ def make_answer_households(row: pd.Series) -> str | None:
     households = fmt_int(row.get("세대수"))
     if not name or not households:
         return None
-    return f"{name}는 총 {households}세대 규모의 아파트 단지입니다."
+    return f"{name}은 총 {households}세대 규모입니다."
 
 
 def make_answer_structure(row: pd.Series) -> str | None:
@@ -118,7 +119,7 @@ def make_answer_structure(row: pd.Series) -> str | None:
     structure = safe_text(row.get("구조요약"))
     if not name or not structure:
         return None
-    return f"{name}의 구조는 {structure}"
+    return f"{name}의 구조 요약은 {structure}"
 
 
 def make_answer_area_band(row: pd.Series) -> str | None:
@@ -126,7 +127,7 @@ def make_answer_area_band(row: pd.Series) -> str | None:
     band = safe_text(row.get("면적대"))
     if not name or not band:
         return None
-    return f"{name}는 {band} 면적대로 분류됩니다."
+    return f"{name}은 {band} 면적대로 분류됩니다."
 
 
 def make_answer_location(row: pd.Series) -> str | None:
@@ -134,7 +135,7 @@ def make_answer_location(row: pd.Series) -> str | None:
     location = build_location(row)
     if not name or not location:
         return None
-    return f"{name}는 {location}에 위치한 아파트입니다."
+    return f"{name}은 {location}에 위치합니다."
 
 
 def make_answer_location_detail(row: pd.Series) -> str | None:
@@ -151,27 +152,20 @@ def make_answer_station(row: pd.Series) -> str | None:
     if not station:
         return None
     if distance:
-        return f"가장 가까운 지하철역은 {station}이며 약 {distance}m 거리에 있습니다."
-    return f"가장 가까운 지하철역은 {station}입니다."
+        return f"가장 가까운 역은 {station}이며 약 {distance}m 거리입니다."
+    return f"가장 가까운 역은 {station}입니다."
 
 
 def make_answer_transport_summary(row: pd.Series) -> str | None:
-    station = safe_text(row.get("가장가까운역"))
-    lines = safe_text(row.get("가장가까운역_호선요약"))
-    transfer = safe_text(row.get("환승역여부"))
-    if not station:
-        return None
-    transfer_text = "환승역입니다" if transfer == "예" else "환승역은 아닙니다"
-    if lines and lines != "호선 정보 없음":
-        return f"{station} 이용이 가능하며 연결 노선은 {lines}이고 {transfer_text}."
-    return f"{station} 이용이 가능하며 {transfer_text}."
+    summary = safe_text(row.get("교통_비교요약")) or safe_text(row.get("가장가까운역_호선요약"))
+    return summary
 
 
 def make_answer_distance(row: pd.Series) -> str | None:
     distance = fmt_int(row.get("거리_m"))
     if not distance:
         return None
-    return f"지하철역까지 거리는 약 {distance}m입니다."
+    return f"가장 가까운 역까지 거리는 약 {distance}m입니다."
 
 
 def make_answer_price(row: pd.Series) -> str | None:
@@ -186,56 +180,35 @@ def make_answer_price_per_pyeong(row: pd.Series) -> str | None:
     value = fmt_float(row.get("평당_공급액"), 2)
     if not value:
         return None
-    return f"평당 공급가는 {value}만원입니다."
+    return f"평당 공급액은 {value}만원입니다."
 
 
 def make_answer_price_summary(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("가격요약"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("가격요약"))
 
 
 def make_answer_medical(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("의료시설_요약"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("의료시설_요약"))
 
 
 def make_answer_lifestyle(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("생활인프라_요약"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("생활인프라_요약"))
 
 
 def make_answer_commute(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("통근통학_요약"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("통근통학_요약"))
 
 
 def make_answer_builder(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("건설사_요약"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("건설사_요약"))
 
 
 def make_answer_policy(row: pd.Series) -> str | None:
-    summary = safe_text(row.get("정책특이사항_설명"))
-    if not summary:
-        return None
-    return summary
+    return safe_text(row.get("정책특이사항_설명"))
 
 
 def make_answer_description(row: pd.Series) -> str | None:
-    desc = safe_text(row.get("description"))
-    if not desc:
-        return None
-    return desc
+    return safe_text(row.get("description"))
 
 
 def build_templates(subject: str) -> list[dict[str, str]]:
@@ -247,22 +220,16 @@ def build_templates(subject: str) -> list[dict[str, str]]:
         {"category": "fact", "question": f"{subject} 면적대는 뭐야", "answer_key": "area_band"},
         {"category": "location", "question": f"{subject} 위치가 어디야", "answer_key": "location"},
         {"category": "location", "question": f"{subject} 주소 알려줘", "answer_key": "location_detail"},
-        {"category": "location", "question": f"{subject} 어느 지역 아파트야", "answer_key": "location"},
         {"category": "transport", "question": f"{subject} 근처 지하철역은 어디야", "answer_key": "station"},
-        {"category": "transport", "question": f"{subject}에서 가장 가까운 역은", "answer_key": "station"},
         {"category": "transport", "question": f"{subject} 지하철 접근성 어때", "answer_key": "transport_summary"},
         {"category": "transport", "question": f"{subject} 가까운 역까지 거리는 얼마야", "answer_key": "distance"},
         {"category": "price", "question": f"{subject} 분양가는 얼마야", "answer_key": "price"},
         {"category": "price", "question": f"{subject} 평당 가격은", "answer_key": "price_per_pyeong"},
         {"category": "price", "question": f"{subject} 가격 수준은 어떤 편이야", "answer_key": "price_summary"},
-        {"category": "price", "question": f"{subject} 가격 메리트 있어", "answer_key": "price_summary"},
-        {"category": "lifestyle", "question": f"{subject} 주변 상권은 어때", "answer_key": "lifestyle"},
         {"category": "lifestyle", "question": f"{subject} 생활 인프라는 어떤 편이야", "answer_key": "lifestyle"},
         {"category": "lifestyle", "question": f"{subject} 병원 접근성은 어때", "answer_key": "medical"},
         {"category": "lifestyle", "question": f"{subject} 통근 통학 여건은 어때", "answer_key": "commute"},
         {"category": "lifestyle", "question": f"{subject} 건설사 수준은 어때", "answer_key": "builder"},
-        {"category": "policy", "question": f"{subject}은 투기과열지구야", "answer_key": "policy"},
-        {"category": "policy", "question": f"{subject}은 분양가 상한제 적용됐어", "answer_key": "policy"},
         {"category": "policy", "question": f"{subject} 규제지역이야", "answer_key": "policy"},
         {"category": "fact", "question": f"{subject} 단지 설명해줘", "answer_key": "description"},
     ]
@@ -291,6 +258,160 @@ ANSWER_BUILDERS = {
 }
 
 
+def make_knowledge_records(knowledge_df: pd.DataFrame) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for index, row in knowledge_df.iterrows():
+        term = safe_text(row.get("term"))
+        definition = safe_text(row.get("definition"))
+        related_fields = safe_text(row.get("related_dataset_fields")) or "없음"
+        caution = safe_text(row.get("caution")) or ""
+        if not term or not definition:
+            continue
+        answer = f"일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_fields}"
+        if caution:
+            answer += f"\n주의사항: {caution}"
+        base = {
+            "아파트명": "GENERAL_KNOWLEDGE",
+            "문서ID": f"KNOW_{index + 1:03d}",
+            "category": "knowledge_term",
+            "answer_type": "knowledge_answer",
+            "expected_answer_type": "knowledge_answer",
+            "expected_match_status": "KNOWN",
+            "must_not_include": "",
+        }
+        records.append(
+            {
+                **base,
+                "question": f"{term}이 뭐야",
+                "answer": answer,
+                "must_include": "일반 설명",
+            }
+        )
+        records.append(
+            {
+                **base,
+                "question": f"{term} 설명해줘",
+                "answer": answer,
+                "must_include": term,
+            }
+        )
+    return records
+
+
+def make_meta_records(data_cutoff: str) -> list[dict[str, str]]:
+    answer = (
+        f"데이터 기준일: {data_cutoff}\n"
+        "답변 가능 범위: 아파트 기본정보, 가격, 교통, 정책, 공원/병원 기반 비교\n"
+        "예시 질문: 송파구에서 10억 이하 아파트 추천해줘 / 지하철 접근성 좋은 아파트 3개 비교해줘 / 헬리오시티 세대수 알려줘"
+    )
+    return [
+        {
+            "question": "이 데이터 언제 기준이야",
+            "answer": answer,
+            "아파트명": "DATA_SCOPE",
+            "문서ID": "META_001",
+            "category": "scope_meta",
+            "answer_type": "meta_answer",
+            "expected_answer_type": "meta_answer",
+            "expected_match_status": "KNOWN",
+            "must_include": data_cutoff,
+            "must_not_include": "",
+        },
+        {
+            "question": "어떤 질문을 하면 잘 답해줘",
+            "answer": answer,
+            "아파트명": "DATA_SCOPE",
+            "문서ID": "META_002",
+            "category": "scope_meta",
+            "answer_type": "meta_answer",
+            "expected_answer_type": "meta_answer",
+            "expected_match_status": "KNOWN",
+            "must_include": "예시 질문",
+            "must_not_include": "",
+        },
+    ]
+
+
+def make_no_match_records(data_cutoff: str) -> list[dict[str, str]]:
+    answer = (
+        f"현재 데이터 기준({data_cutoff})으로 해당 조건에 맞는 아파트를 찾지 못했습니다.\n"
+        "조건을 완화하거나 지역/예산 범위를 다시 지정해 주세요."
+    )
+    return [
+        {
+            "question": "서울에서 1억 이하이면서 지하철 100m 이내 아파트 추천해줘",
+            "answer": answer,
+            "아파트명": "NO_MATCH",
+            "문서ID": "NO_MATCH_001",
+            "category": "recommend_no_match",
+            "answer_type": "no_match_response",
+            "expected_answer_type": "no_match_response",
+            "expected_match_status": "NO_MATCH",
+            "must_include": "찾지 못했습니다",
+            "must_not_include": "APT_",
+        },
+        {
+            "question": "송파구에서 2억 이하 대단지 신축 아파트 추천해줘",
+            "answer": answer,
+            "아파트명": "NO_MATCH",
+            "문서ID": "NO_MATCH_002",
+            "category": "recommend_no_match",
+            "answer_type": "no_match_response",
+            "expected_answer_type": "no_match_response",
+            "expected_match_status": "NO_MATCH",
+            "must_include": "조건을 완화",
+            "must_not_include": "APT_",
+        },
+    ]
+
+
+def make_comparative_records(df: pd.DataFrame) -> list[dict[str, str]]:
+    if df.empty:
+        return []
+    top_region = safe_text(df["시군구"].dropna().astype(str).value_counts().index[0]) or "서울"
+    return [
+        {
+            "question": f"{top_region}에서 공원 가까운 아파트 비교해줘",
+            "answer": "비교 기준: 공원_비교요약\n현재 데이터 기준으로 공원 관련 지표가 있는 후보들을 비교할 수 있습니다.",
+            "아파트명": "COMPARATIVE",
+            "문서ID": "COMP_001",
+            "category": "comparative_supported",
+            "answer_type": "comparison_recommendation",
+            "expected_answer_type": "comparison_recommendation",
+            "expected_match_status": "EXACT_MATCH",
+            "must_include": "비교 기준",
+            "must_not_include": "",
+        },
+        {
+            "question": f"{top_region}에서 병원 접근성 좋은 아파트 비교해줘",
+            "answer": "비교 기준: 병원_비교요약\n현재 데이터 기준으로 병원 접근 지표가 있는 후보들을 비교할 수 있습니다.",
+            "아파트명": "COMPARATIVE",
+            "문서ID": "COMP_002",
+            "category": "comparative_supported",
+            "answer_type": "comparison_recommendation",
+            "expected_answer_type": "comparison_recommendation",
+            "expected_match_status": "EXACT_MATCH",
+            "must_include": "비교 기준",
+            "must_not_include": "",
+        },
+        {
+            "question": f"{top_region}에서 아이 키우기 좋은 아파트 추천해줘",
+            "answer": (
+                "현재 MVP에서는 공원, 병원, 지하철처럼 데이터로 직접 판정 가능한 조건만 비교 추천할 수 있습니다.\n"
+                "예시 질문: 공원 가까운 아파트 비교해줘 / 병원 접근성 좋은 곳 비교해줘"
+            ),
+            "아파트명": "COMPARATIVE",
+            "문서ID": "COMP_003",
+            "category": "comparative_unsupported",
+            "answer_type": "unsupported_comparative_response",
+            "expected_answer_type": "unsupported_comparative_response",
+            "expected_match_status": "UNKNOWN",
+            "must_include": "데이터로 직접 판정 가능한 조건",
+            "must_not_include": "",
+        },
+    ]
+
+
 def markdown_table(df: pd.DataFrame) -> str:
     if df.empty:
         return "| 데이터 없음 |\n| --- |"
@@ -313,9 +434,17 @@ def main() -> None:
 
     if not INPUT_FILE.exists():
         raise FileNotFoundError(f"입력 파일이 없습니다: {INPUT_FILE}")
+    if not INPUT_KNOWLEDGE.exists():
+        raise FileNotFoundError(f"지식 사전 파일이 없습니다: {INPUT_KNOWLEDGE}")
 
     df, encoding = load_csv(INPUT_FILE)
+    knowledge_df, _ = load_csv(INPUT_KNOWLEDGE)
     original_rows = len(df)
+    data_cutoff = (
+        safe_text(df["데이터기준일"].dropna().iloc[0])
+        if "데이터기준일" in df.columns and df["데이터기준일"].notna().any()
+        else "기준일 미상"
+    )
 
     duplicated_names = set(
         df.loc[df["아파트명"].duplicated(keep=False) & df["아파트명"].notna(), "아파트명"].astype(str)
@@ -331,13 +460,11 @@ def main() -> None:
             continue
 
         subject = build_subject(row, duplicated_names)
-        templates = build_templates(subject)
-
-        for template in templates:
+        for template in build_templates(subject):
             answer_builder = ANSWER_BUILDERS[template["answer_key"]]
             answer = answer_builder(row)
             question = template["question"].strip()
-            if not question or not apartment_name:
+            if not question:
                 continue
             if answer is None or is_missing(answer):
                 skipped_null_answers += 1
@@ -349,8 +476,18 @@ def main() -> None:
                     "아파트명": apartment_name,
                     "문서ID": document_id,
                     "category": template["category"],
+                    "answer_type": "apartment_fact_lookup",
+                    "expected_answer_type": "apartment_fact_lookup",
+                    "expected_match_status": "EXACT_MATCH",
+                    "must_include": apartment_name,
+                    "must_not_include": "",
                 }
             )
+
+    qa_records.extend(make_knowledge_records(knowledge_df))
+    qa_records.extend(make_meta_records(data_cutoff))
+    qa_records.extend(make_no_match_records(data_cutoff))
+    qa_records.extend(make_comparative_records(df))
 
     qa_df = pd.DataFrame(qa_records)
     before_filter_count = len(qa_df)
@@ -363,9 +500,7 @@ def main() -> None:
     qa_df = qa_df.drop_duplicates(subset=["question"], keep="first").reset_index(drop=True)
 
     if len(qa_df) < MIN_QA_TARGET:
-        raise RuntimeError(
-            f"생성된 QA 수가 목표보다 적습니다. 생성 수={len(qa_df)}, 목표={MIN_QA_TARGET}"
-        )
+        raise RuntimeError(f"생성된 QA 수가 목표보다 적습니다. 생성 수={len(qa_df)}, 목표={MIN_QA_TARGET}")
 
     qa_df.to_csv(OUTPUT_QA, index=False, encoding="utf-8-sig")
 
@@ -379,36 +514,48 @@ def main() -> None:
             fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
     eval_size = min(1000, len(qa_df))
-    eval_df = qa_df.sample(n=eval_size, random_state=RANDOM_SEED)[["question", "answer", "문서ID"]].rename(
-        columns={"answer": "expected_answer"}
+    eval_columns = [
+        "question",
+        "answer",
+        "문서ID",
+        "expected_answer_type",
+        "expected_match_status",
+        "must_include",
+        "must_not_include",
+    ]
+    eval_df = qa_df.sample(n=eval_size, random_state=RANDOM_SEED)[eval_columns].rename(
+        columns={
+            "answer": "expected_answer",
+            "문서ID": "expected_doc_id",
+        }
     )
     eval_df.to_csv(OUTPUT_EVAL, index=False, encoding="utf-8-sig")
 
     per_category = qa_df["category"].value_counts().rename_axis("category").reset_index(name="count")
-    sample_df = qa_df.head(10)
+    sample_df = qa_df.head(12)
 
     report_lines = [
         "# QA Generation Report",
         "",
         "## 개요",
         f"- 입력 파일: `{INPUT_FILE.name}`",
-        f"- 감지 인코딩: `{encoding}`",
+        f"- 입력 인코딩: `{encoding}`",
         f"- 입력 아파트 행 수: {original_rows}",
         f"- 필터 전 QA 수: {before_filter_count}",
         f"- 필터 후 QA 수: {len(qa_df)}",
-        f"- null 답변으로 제외된 수: {skipped_null_answers}",
+        f"- null 응답으로 제외된 수: {skipped_null_answers}",
         f"- 질문 중복 제거 수: {duplicate_question_count}",
         f"- 평가셋 크기: {len(eval_df)}",
         "",
-        "## 질문 생성 전략",
-        "- 각 행마다 25개의 템플릿 질문을 생성했습니다.",
-        "- 중복 아파트명은 전용면적/타입 정보를 질문 주어에 포함해 질문 중복을 줄였습니다.",
-        "- 답변은 모두 `apartment_chatbot_v3.csv`의 컬럼 값만 사용해 생성했습니다.",
+        "## 생성 규칙 요약",
+        "- 아파트별 사실 QA를 기본으로 생성했습니다.",
+        "- 일반 부동산 지식 QA와 데이터 범위 안내 QA를 추가했습니다.",
+        "- no-match 응답과 지원/미지원 비교 질문을 별도 카테고리로 추가했습니다.",
         "",
         "## 카테고리별 QA 수",
         markdown_table(per_category),
         "",
-        "## 샘플 QA 10개",
+        "## 샘플 QA 12개",
         markdown_table(sample_df),
         "",
         "## 생성 파일",

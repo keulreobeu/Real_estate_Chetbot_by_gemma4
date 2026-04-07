@@ -2,44 +2,41 @@
 
 ## 개요
 - 입력 파일: `apartment_chatbot_v3.csv`
-- 감지 인코딩: `utf-8-sig`
+- 입력 인코딩: `utf-8-sig`
 - 총 생성 질문 수: 2000
 
 ## 유형별 개수
 | type | count |
 | --- | --- |
-| condition | 335 |
-| comparison | 335 |
-| multi_condition | 334 |
-| vague | 334 |
+| condition | 334 |
+| comparison | 334 |
+| multi_condition | 333 |
 | region | 333 |
-| colloquial | 329 |
+| vague | 333 |
+| colloquial | 333 |
 
 ## 생성 규칙 요약
-- 조건 질문: 거리, 가격, 병원, 정책, 건설사, 면적대 조건을 반영했습니다.
-- 비교 질문: 세대수, 가격, 면적, 역 접근성 기준 최댓값/최솟값 질문을 만들었습니다.
-- 복합 조건 질문: 지역 + 교통 + 가격 + 정책 + 인프라 조합을 사용했습니다.
-- 지역 질문: 시도, 시군구, 동 단위 질문을 생성했습니다.
-- 모호 질문: 추천/살기 좋음/생활 편의 같은 추상 표현을 사용했습니다.
-- 구어체 질문: 오타/축약/구어형 표현을 반영했습니다.
+- 추천형 질문에는 expected_router_type과 expected_match_status를 함께 기록했습니다.
+- no-match와 unsupported comparative 질문은 must_not_recommend=Y로 표시했습니다.
+- 한계 고지가 필요한 질문은 must_disclose_limit=Y로 표시했습니다.
 
 ## 샘플 12개
-| question | type | expected_doc | expected_field |
-| --- | --- | --- | --- |
-| 지하철 300m 이내 아파트 알려줘 | condition | APT_002261 | 거리_m |
-| 역까지 300m 안쪽 아파트 뭐 있어 | condition | APT_002261 | 거리_m |
-| 지하철 500m 이내 아파트 알려줘 | condition | APT_002267 | 거리_m |
-| 역까지 500m 안쪽 아파트 뭐 있어 | condition | APT_002267 | 거리_m |
-| 지하철 700m 이내 아파트 알려줘 | condition | APT_002262 | 거리_m |
-| 역까지 700m 안쪽 아파트 뭐 있어 | condition | APT_002262 | 거리_m |
-| 지하철 1000m 이내 아파트 알려줘 | condition | APT_002267 | 거리_m |
-| 역까지 1000m 안쪽 아파트 뭐 있어 | condition | APT_002267 | 거리_m |
-| 중형 아파트 알려줘 | condition | APT_003149 | 면적대 |
-| 중형 면적대 단지 뭐 있어 | condition | APT_003149 | 면적대 |
-| 중소형 아파트 알려줘 | condition | APT_003065 | 면적대 |
-| 중소형 면적대 단지 뭐 있어 | condition | APT_003065 | 면적대 |
+| question | type | expected_doc | expected_field | expected_router_type | expected_match_status | must_not_recommend | must_disclose_limit |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 화성시에서 지하철 300m 이내 아파트 추천해줘 | condition | APT_002263 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 화성시에서 지하철 500m 이내 아파트 추천해줘 | condition | APT_002267 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 화성시에서 지하철 700m 이내 아파트 추천해줘 | condition | APT_002263 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 화성시에서 지하철 1000m 이내 아파트 추천해줘 | condition | APT_002263 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 화성시에서 가격 괜찮은 아파트 추천해줘 | condition | APT_001874 | 가격요약 | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 연수구에서 지하철 300m 이내 아파트 추천해줘 | condition | APT_001421 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 연수구에서 지하철 500m 이내 아파트 추천해줘 | condition | APT_001421 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 연수구에서 지하철 700m 이내 아파트 추천해줘 | condition | APT_001424 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 연수구에서 지하철 1000m 이내 아파트 추천해줘 | condition | APT_001423 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 연수구에서 가격 괜찮은 아파트 추천해줘 | condition | APT_001406 | 가격요약 | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 평택시에서 지하철 300m 이내 아파트 추천해줘 | condition | APT_000851 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
+| 평택시에서 지하철 500m 이내 아파트 추천해줘 | condition | APT_000854 | 거리_m | RECOMMEND_STRUCTURED | EXACT_MATCH | N | N |
 
 ## 생성 파일
 - `edge_case_questions.csv`
 - `edge_case_eval.csv`
-- `edge_question_report.md`
+- `04_edge_question_report.md`

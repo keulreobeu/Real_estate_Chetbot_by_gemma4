@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -24,12 +26,15 @@ EXAMPLE_MODEL_CONFIG_FILE = CONFIG_DIR / "models.local.example.json"
 INPUT_MAIN = DATA_DIR / "apartment_chatbot_v3.csv"
 INPUT_EVAL = QA_DIR / "evaluation_dataset.csv"
 INPUT_EDGE = QA_DIR / "edge_case_eval.csv"
+INPUT_KNOWLEDGE = QA_DIR / "real_estate_knowledge_base.csv"
 
 OUTPUT_SOURCE_INDEX = EVAL_DIR / "gemma4_generation_source_index.csv"
 
 ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "utf-8"]
 DEFAULT_MODEL_ID = "gemma4_2b"
-DEFAULT_BACKEND = "mock"
+DEFAULT_BACKEND = "transformers"
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 20
+DEFAULT_WEB_TIMEOUT_SECONDS = 25
 DEFAULT_FALLBACK_ANSWER = "데이터에서 확인되지 않습니다."
 
 REQUIRED_MAIN_COLUMNS = [
@@ -48,10 +53,33 @@ REQUIRED_MAIN_COLUMNS = [
     "환승역여부",
     "description",
     "검색키워드",
+    "데이터기준일",
+    "질의매칭태그",
+    "공원_비교요약",
+    "병원_비교요약",
+    "교통_비교요약",
 ]
 
-REQUIRED_EVAL_COLUMNS = ["question", "expected_answer", "문서ID"]
-REQUIRED_EDGE_COLUMNS = ["question", "expected_doc", "expected_field"]
+REQUIRED_EVAL_COLUMNS = [
+    "question",
+    "expected_answer",
+    "expected_doc_id",
+    "expected_answer_type",
+    "expected_match_status",
+    "must_include",
+    "must_not_include",
+]
+REQUIRED_EDGE_COLUMNS = [
+    "question",
+    "expected_doc",
+    "expected_field",
+    "expected_router_type",
+    "expected_match_status",
+    "must_not_recommend",
+    "must_disclose_limit",
+]
+
+_RETRIEVAL_CACHE: dict[int, list[dict[str, Any]]] = {}
 
 
 def ensure_parent(path: Path) -> None:
@@ -137,8 +165,35 @@ def build_search_text(row: pd.Series) -> str:
         "description",
         "검색키워드",
         "환승역여부",
+        "질의매칭태그",
+        "공원_비교요약",
+        "병원_비교요약",
+        "교통_비교요약",
     ]
     return " ".join(safe_text(row.get(field)) for field in fields if safe_text(row.get(field)))
+
+
+def prepare_retrieval_cache(source_df: pd.DataFrame) -> list[dict[str, Any]]:
+    cache_key = id(source_df)
+    cached = _RETRIEVAL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    prepared_rows: list[dict[str, Any]] = []
+    for row_index, row in source_df.iterrows():
+        prepared_rows.append(
+            {
+                "row_index": row_index,
+                "doc_id": safe_text(row.get("문서ID")),
+                "apartment_name": safe_text(row.get("아파트명")),
+                "station": safe_text(row.get("가장가까운역")),
+                "district": safe_text(row.get("시군구")),
+                "row_tokens": tokenize(safe_text(row.get("검색텍스트"))),
+            }
+        )
+
+    _RETRIEVAL_CACHE[cache_key] = prepared_rows
+    return prepared_rows
 
 
 def infer_used_fields(question: str) -> list[str]:
@@ -161,24 +216,23 @@ def infer_used_fields(question: str) -> list[str]:
     return used_fields
 
 
-def score_row(question: str, row: pd.Series) -> float:
-    question_tokens = tokenize(question)
-    row_tokens = tokenize(safe_text(row.get("검색텍스트")))
+def score_row(question: str, question_tokens: set[str], row_meta: dict[str, Any]) -> float:
+    row_tokens = row_meta["row_tokens"]
     if not question_tokens or not row_tokens:
         return 0.0
 
     overlap = question_tokens & row_tokens
     score = float(len(overlap))
 
-    apartment_name = safe_text(row.get("아파트명"))
+    apartment_name = row_meta["apartment_name"]
     if apartment_name and apartment_name in question:
         score += 5.0
 
-    station = safe_text(row.get("가장가까운역"))
+    station = row_meta["station"]
     if station and station in question:
         score += 3.0
 
-    district = safe_text(row.get("시군구"))
+    district = row_meta["district"]
     if district and district in question:
         score += 2.0
 
@@ -186,27 +240,50 @@ def score_row(question: str, row: pd.Series) -> float:
 
 
 def retrieve_top_k(question: str, source_df: pd.DataFrame, top_k: int = 3) -> pd.DataFrame:
-    scored = source_df.copy()
-    scored["retrieval_score"] = scored.apply(lambda row: score_row(question, row), axis=1)
-    scored = scored.sort_values(["retrieval_score", "문서ID"], ascending=[False, True])
-    return scored.head(top_k).reset_index(drop=True)
+    question_tokens = tokenize(question)
+    prepared_rows = prepare_retrieval_cache(source_df)
+    scored_candidates = [
+        (-score_row(question, question_tokens, row_meta), row_meta["doc_id"], row_meta["row_index"])
+        for row_meta in prepared_rows
+    ]
+    top_candidates = heapq.nsmallest(top_k, scored_candidates)
+    top_indices = [row_index for _, _, row_index in top_candidates]
+    retrieval_score_map = {row_index: -neg_score for neg_score, _, row_index in top_candidates}
+
+    retrieved_df = source_df.iloc[top_indices].copy()
+    retrieved_df["retrieval_score"] = [retrieval_score_map[row_index] for row_index in top_indices]
+    return retrieved_df.reset_index(drop=True)
 
 
 def build_context_block(retrieved_df: pd.DataFrame) -> str:
     blocks: list[str] = []
     for _, row in retrieved_df.iterrows():
+        location = " ".join(
+            part
+            for part in [safe_text(row.get("시도")), safe_text(row.get("시군구")), safe_text(row.get("동"))]
+            if part
+        )
         block = [
             f"문서ID: {safe_text(row.get('문서ID'))}",
             f"아파트명: {safe_text(row.get('아파트명'))}",
-            f"위치: {' '.join(part for part in [safe_text(row.get('시도')), safe_text(row.get('시군구')), safe_text(row.get('동'))] if part)}",
-            f"교통: 가장 가까운 역 {safe_text(row.get('가장가까운역'))}, 거리 {format_number(row.get('거리_m'))}m, 노선 {safe_text(row.get('가장가까운역_호선요약'))}, 환승 {safe_text(row.get('환승역여부'))}",
-            f"가격: 공급액 {format_number(row.get('공급액(만원)'))}만원, 평당 공급액 {format_number(row.get('평당_공급액'), 2)}만원",
+            f"위치: {location}",
+            (
+                f"교통: 가장 가까운 역 {safe_text(row.get('가장가까운역'))}, "
+                f"거리 {format_number(row.get('거리_m'))}m, "
+                f"노선 {safe_text(row.get('가장가까운역_호선요약'))}, "
+                f"환승 {safe_text(row.get('환승역여부'))}"
+            ),
+            (
+                f"가격: 공급액 {format_number(row.get('공급액(만원)'))}만원, "
+                f"평당 공급액 {format_number(row.get('평당_공급액'), 2)}만원"
+            ),
             f"설명: {safe_text(row.get('description'))}",
         ]
         blocks.append("\n".join(block))
     return "\n\n".join(blocks)
 
 
+@lru_cache(maxsize=1)
 def load_prompt_template() -> str:
     if not PROMPT_FILE.exists():
         raise FileNotFoundError(f"프롬프트 템플릿이 없습니다: {PROMPT_FILE}")
@@ -273,8 +350,34 @@ def resolve_model_config(model_id: str) -> dict[str, Any]:
 
     model_config = dict(models[model_id])
     model_config.setdefault("model_id", model_id)
-    model_config["model_path"] = str(expand_path(str(model_config["model_path"])))
-    return model_config
+    runtime = str(model_config.get("runtime", "transformers"))
+    model_config["runtime"] = runtime
+
+    if "local_dir" in model_config:
+        local_dir = safe_text(model_config.get("local_dir"))
+        model_config["local_dir"] = str(expand_path(local_dir)) if local_dir else ""
+
+    if runtime == "transformers":
+        hf_model_id = safe_text(model_config.get("hf_model_id"))
+        if not hf_model_id:
+            raise ValueError(f"{model_id} config is missing hf_model_id")
+        model_config.setdefault("processor_id", hf_model_id)
+        model_config.setdefault("torch_dtype", "bfloat16")
+        model_config.setdefault("device_map", "auto")
+        model_config.setdefault("attn_implementation", "")
+        model_config.setdefault("max_input_tokens", 4096)
+        model_config.setdefault("max_output_tokens", 256)
+        model_config.setdefault("supports_gpu", True)
+        return model_config
+
+    if runtime == "llama_cpp":
+        model_path = safe_text(model_config.get("model_path"))
+        if not model_path:
+            raise ValueError(f"{model_id} config is missing model_path")
+        model_config["model_path"] = str(expand_path(model_path))
+        return model_config
+
+    raise ValueError(f"Unsupported runtime in model config: {runtime}")
 
 
 def pick_default_model_id() -> str:

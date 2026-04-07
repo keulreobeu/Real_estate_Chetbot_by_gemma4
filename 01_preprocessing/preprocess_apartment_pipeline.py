@@ -23,6 +23,7 @@ OUTPUT_STATION_LINE = DATA_DIR / "station_line_map.csv"
 OUTPUT_APT_STATION = DATA_DIR / "apartment_station_map.csv"
 OUTPUT_MAPPING = DATA_DIR / "apartment_column_mapping.csv"
 OUTPUT_REPORT = REPORT_DIR / "02_preprocessing_full_report.md"
+OUTPUT_KNOWLEDGE = QA_DIR / "real_estate_knowledge_base.csv"
 
 ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "utf-8"]
 
@@ -352,6 +353,191 @@ def build_search_keywords(row: pd.Series) -> str:
     return ", ".join(parts)
 
 
+def infer_data_cutoff(path: Path) -> str:
+    digits = "".join(ch for ch in path.stem if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return "기준일 미상"
+
+
+def build_missing_field_summary(row: pd.Series) -> str:
+    checks = {
+        "가격": ["공급액(만원)", "평당_공급액"],
+        "교통": ["가장가까운역", "거리_m", "가장가까운역_호선요약"],
+        "정책": [
+            "분양당시_투기과열지구",
+            "현재_투기과열지구",
+            "분양당시_분양가상한제",
+            "현재_분양가상한제",
+        ],
+        "공원": ["공원"],
+        "병원": ["1차병원", "2차병원", "3차병원"],
+        "학교": ["초등학교_접근지표"],
+    }
+    missing_labels: list[str] = []
+    for label, columns in checks.items():
+        if all(is_missing(row.get(column)) for column in columns if column in row.index) or not any(
+            column in row.index for column in columns
+        ):
+            missing_labels.append(label)
+    return ", ".join(missing_labels) if missing_labels else "없음"
+
+
+def build_query_tags(row: pd.Series) -> str:
+    tags: list[str] = []
+    mapping = [
+        ("지역", ["시도", "시군구", "동"]),
+        ("가격", ["공급액(만원)", "평당_공급액", "가격요약"]),
+        ("교통", ["가장가까운역", "거리_m", "가장가까운역_호선요약"]),
+        ("지하철", ["가장가까운역", "거리_m"]),
+        ("세대수", ["세대수"]),
+        ("면적", ["전용면적", "공급면적", "면적대"]),
+        ("정책", ["정책특이사항_설명"]),
+        ("병원", ["병원_접근지표", "의료시설_요약"]),
+        ("공원", ["공원_접근지표", "공원_비교요약"]),
+        ("학교", ["학교_접근지표", "학교_비교요약"]),
+    ]
+    for tag, columns in mapping:
+        if any(column in row.index and not is_missing(row.get(column)) for column in columns):
+            tags.append(tag)
+    return "|".join(tags)
+
+
+def build_scope_summary(row: pd.Series) -> str:
+    scopes = ["아파트 기본정보", "가격", "교통", "정책"]
+    if not is_missing(row.get("공원_비교요약")):
+        scopes.append("공원 비교")
+    if not is_missing(row.get("병원_비교요약")):
+        scopes.append("병원 비교")
+    if not is_missing(row.get("학교_비교요약")) and str(row.get("학교_비교요약")) != "학교 데이터 없음":
+        scopes.append("학교 비교")
+    return ", ".join(scopes)
+
+
+def build_source_flags(row: pd.Series) -> str:
+    flags = ["dataset_fact", "derived_fact"]
+    if is_missing(row.get("정책특이사항_설명")):
+        flags.remove("derived_fact")
+    return "|".join(flags)
+
+
+def score_subway_access(row: pd.Series) -> float | pd.NA:
+    distance = row.get("거리_m")
+    lines = row.get("호선수")
+    transfer = to_bool(row.get("환승역여부"))
+    if is_missing(distance):
+        return pd.NA
+    score = max(0.0, 1000.0 - float(distance))
+    if not is_missing(lines):
+        score += float(lines) * 50.0
+    if transfer is True:
+        score += 75.0
+    return round(score, 1)
+
+
+def summarize_subway_compare(row: pd.Series) -> str:
+    station = row.get("가장가까운역")
+    distance = format_number(row.get("거리_m"), 0)
+    lines = format_number(row.get("호선수"), 0)
+    if is_missing(station):
+        return "지하철 비교 정보 없음"
+    parts = [f"{station} 이용 가능"]
+    if distance:
+        parts.append(f"도보 거리 약 {distance}m")
+    if lines:
+        parts.append(f"{lines}개 노선 접근")
+    if to_bool(row.get("환승역여부")) is True:
+        parts.append("환승 가능")
+    return ", ".join(parts)
+
+
+def score_park_access(value: Any) -> float | pd.NA:
+    if is_missing(value):
+        return pd.NA
+    return round(float(value), 1)
+
+
+def summarize_park_compare(value: Any) -> str:
+    if is_missing(value):
+        return "공원 비교 정보 없음"
+    count = int(round(float(value)))
+    if count <= 0:
+        return "공원 정보 없음"
+    return f"주변 공원 관련 시설 수 {count}개 기준으로 비교 가능"
+
+
+def score_medical_access(row: pd.Series) -> float:
+    primary = 0 if is_missing(row.get("1차병원")) else float(row.get("1차병원"))
+    secondary = 0 if is_missing(row.get("2차병원")) else float(row.get("2차병원"))
+    tertiary = 0 if is_missing(row.get("3차병원")) else float(row.get("3차병원"))
+    return round(primary + secondary * 2 + tertiary * 3, 1)
+
+
+def summarize_medical_compare(score: Any) -> str:
+    if is_missing(score):
+        return "병원 비교 정보 없음"
+    return f"병원 접근 지표 {format_number(score, 1)} 기준으로 비교 가능"
+
+
+def build_knowledge_records(data_cutoff: str) -> list[dict[str, str]]:
+    return [
+        {
+            "term": "용적률",
+            "definition": "대지면적 대비 건축물 연면적의 비율입니다. 일반적으로 높을수록 같은 땅에 더 많은 연면적이 들어간다는 뜻입니다.",
+            "related_dataset_fields": "용적률",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "단지별 실제 값은 데이터 기준일과 원본 수집 상태에 따라 다를 수 있습니다.",
+            "data_cutoff": data_cutoff,
+        },
+        {
+            "term": "건폐율",
+            "definition": "대지면적 대비 건축면적의 비율입니다. 같은 부지에서 건물이 바닥을 얼마나 차지하는지 보여줍니다.",
+            "related_dataset_fields": "건폐율",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "일반 개념 설명이며, 단지별 값은 데이터 필드를 따로 확인해야 합니다.",
+            "data_cutoff": data_cutoff,
+        },
+        {
+            "term": "실거래가",
+            "definition": "실제로 거래가 성사된 금액입니다. 시점에 따라 달라지므로 기준일이 매우 중요합니다.",
+            "related_dataset_fields": "실거래가_최근값",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "현재 저장소에 실거래가 필드가 없으면 개념만 설명하고 수치는 답하지 않습니다.",
+            "data_cutoff": data_cutoff,
+        },
+        {
+            "term": "시세",
+            "definition": "일반적으로 시장에서 형성된 가격 수준을 의미합니다. 실거래가와 다를 수 있습니다.",
+            "related_dataset_fields": "시세_기준일",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "현재 저장소에 시세 필드가 없으면 개념만 설명하고 수치는 답하지 않습니다.",
+            "data_cutoff": data_cutoff,
+        },
+        {
+            "term": "평당가",
+            "definition": "평 단위로 환산한 가격입니다. 단지 간 가격 수준을 비교할 때 자주 사용합니다.",
+            "related_dataset_fields": "평당_공급액",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "현재 단계에서는 공급액 기준 평당가를 사용합니다.",
+            "data_cutoff": data_cutoff,
+        },
+        {
+            "term": "역세권",
+            "definition": "일반적으로 지하철역에 접근하기 쉬운 입지를 뜻합니다. 서비스에서는 역명, 거리, 환승 여부, 노선 수로 판단합니다.",
+            "related_dataset_fields": "가장가까운역|거리_m|환승역여부|호선수",
+            "answer_template": "일반 설명: {definition}\n우리 데이터에서 대응 가능한 필드: {related_dataset_fields}",
+            "source_type": "general_knowledge",
+            "caution": "서비스 내부 판단 기준은 거리와 환승/노선 정보를 기반으로 합니다.",
+            "data_cutoff": data_cutoff,
+        },
+    ]
+
+
 def markdown_table(df: pd.DataFrame) -> str:
     if df.empty:
         return "| 데이터 없음 |\n| --- |"
@@ -371,6 +557,7 @@ def main() -> None:
     QA_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     input_path = find_input_file()
+    data_cutoff = infer_data_cutoff(input_path)
     df_raw, encoding = detect_and_load_csv(input_path)
     original_shape = df_raw.shape
     original_columns = list(df_raw.columns)
@@ -508,6 +695,29 @@ def main() -> None:
     df["정책특이사항_설명"] = df.apply(summarize_policy, axis=1)
     df["description"] = df.apply(build_description, axis=1)
     df["검색키워드"] = df.apply(build_search_keywords, axis=1)
+    df["데이터기준일"] = data_cutoff
+    df["지하철_접근지표"] = df.apply(score_subway_access, axis=1)
+    df["교통_비교요약"] = df.apply(summarize_subway_compare, axis=1)
+    df["공원_개수"] = df["공원"] if "공원" in df.columns else pd.NA
+    df["공원_접근지표"] = df["공원_개수"].apply(score_park_access) if "공원_개수" in df.columns else pd.NA
+    df["공원_비교요약"] = df["공원_개수"].apply(summarize_park_compare) if "공원_개수" in df.columns else "공원 비교 정보 없음"
+    df["병원_접근지표"] = df.apply(score_medical_access, axis=1)
+    df["병원_비교요약"] = df["병원_접근지표"].apply(summarize_medical_compare)
+    df["초등학교_접근지표"] = pd.NA
+    df["학교_접근지표"] = df["초등학교_접근지표"]
+    df["학교_비교요약"] = "학교 데이터 없음"
+    df["확인불가항목"] = df.apply(build_missing_field_summary, axis=1)
+    df["질의매칭태그"] = df.apply(build_query_tags, axis=1)
+    df["답변가능범위"] = df.apply(build_scope_summary, axis=1)
+    df["source_flags"] = df.apply(build_source_flags, axis=1)
+    df["추천가능여부"] = df.apply(
+        lambda row: "Y"
+        if not is_missing(row.get("아파트명"))
+        and not is_missing(row.get("시군구"))
+        and not is_missing(row.get("description"))
+        else "N",
+        axis=1,
+    )
 
     rag_columns = [
         "가장가까운역",
@@ -524,9 +734,27 @@ def main() -> None:
         "건설사_요약",
         "정책특이사항_설명",
         "검색키워드",
+        "데이터기준일",
+        "추천가능여부",
+        "확인불가항목",
+        "질의매칭태그",
+        "답변가능범위",
+        "source_flags",
+        "공원_개수",
+        "공원_접근지표",
+        "병원_접근지표",
+        "학교_접근지표",
+        "지하철_접근지표",
+        "공원_비교요약",
+        "병원_비교요약",
+        "학교_비교요약",
+        "교통_비교요약",
     ]
 
     df.to_csv(OUTPUT_MAIN, index=False, encoding="utf-8-sig")
+
+    knowledge_df = pd.DataFrame(build_knowledge_records(data_cutoff))
+    knowledge_df.to_csv(OUTPUT_KNOWLEDGE, index=False, encoding="utf-8-sig")
 
     qa_columns = [
         "아파트명",
@@ -540,6 +768,10 @@ def main() -> None:
         "가격요약",
         "정책특이사항_설명",
         "description",
+        "데이터기준일",
+        "확인불가항목",
+        "질의매칭태그",
+        "답변가능범위",
     ]
     available_qa_columns = [col for col in qa_columns if col in df.columns]
     df[available_qa_columns].to_csv(OUTPUT_QA, index=False, encoding="utf-8-sig")
@@ -596,6 +828,7 @@ def main() -> None:
         f"- `{OUTPUT_STATION_LINE.name}`",
         f"- `{OUTPUT_APT_STATION.name}`",
         f"- `{OUTPUT_MAPPING.name}`",
+        f"- `{OUTPUT_KNOWLEDGE.name}`",
         f"- `{OUTPUT_REPORT.name}`",
     ]
     OUTPUT_REPORT.write_text("\n".join(report), encoding="utf-8")

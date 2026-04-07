@@ -2,28 +2,36 @@
 
 ## Purpose
 
-`02_gemma4_generation` is the next planned stage after `01_preprocessing`.
+`02_gemma4_generation` is the retrieval-first Gemma 4 generation stage after `01_preprocessing`.
 
-This stage builds the smallest practical MVP for a retrieval-first Gemma 4 real-estate chatbot. The goal is to answer apartment questions using only repository data, return grounded Korean answers, and avoid hallucination when evidence is weak.
+This stage keeps the pipeline intentionally small:
 
-This stage is intentionally narrow:
+- single-turn grounded QA
+- retrieval-first prompt assembly
+- query routing and match-status evaluation before fallback generation
+- local Gemma 4 inference
+- offline evaluation on existing eval and edge datasets
 
-- single-turn question answering
-- retrieval-first pipeline
-- grounded answer generation
-- offline evaluation against existing evaluation assets
+Primary local runtime:
 
-Out of scope for this stage:
+- `transformers` + `torch` + `accelerate`
 
-- fine-tuning
-- web serving
-- multi-turn memory
-- external live data
-- recommendation or price prediction
+Experimental runtime:
+
+- `llama_cpp`
+
+## MVP V2 defaults
+
+The current MVP V2 runs with these defaults:
+
+- default backend: `transformers`
+- default model: `gemma4_2b`
+- deterministic contract path first for recommendation, comparison, fact, knowledge, and meta queries
+- generation path only for `GENERAL_RETRIEVAL_QA`
+- recommendation safety rule: `NO_MATCH` and `UNKNOWN` never show arbitrary apartment candidates
+- public demo recommendation: `transformers --model gemma4_2b`
 
 ## Inputs
-
-Primary inputs from `01_preprocessing`:
 
 - `data/apartment_chatbot_v3.csv`
 - `data/qa/evaluation_dataset.csv`
@@ -31,14 +39,11 @@ Primary inputs from `01_preprocessing`:
 
 ## Outputs
 
-Default stage outputs:
-
 - `data/eval/gemma4_generation_source_index.csv`
 - `data/eval/gemma4_generation_eval_predictions_<model_id>.csv`
 - `data/eval/gemma4_generation_edge_predictions_<model_id>.csv`
 - `data/eval/gemma4_generation_eval_metrics_<model_id>.json`
 - `data/eval/gemma4_generation_edge_metrics_<model_id>.json`
-- `00_Report/06_gemma4_generation_stage_blueprint.md`
 - `00_Report/07_gemma4_generation_model_comparison.md`
 
 ## Folder structure
@@ -49,12 +54,19 @@ Default stage outputs:
   CONTRACT.md
   common.py
   build_generation_assets.py
+  verify_local_inference_setup.py
   run_generation_mvp.py
+  demo_chatbot_mvp.py
+  demo_chatbot_web_mvp.py
+  benchmark_edge_2b.py
+  monitor_edge_progress.py
+  edge_preflight_2b.ps1
   evaluate_generation_mvp.py
   compare_generation_runs.py
   inference/
     base.py
     mock_adapter.py
+    transformers_adapter.py
     llama_cpp_adapter.py
     registry.py
   config/
@@ -68,10 +80,59 @@ Default stage outputs:
 
 1. Validate upstream datasets from `01_preprocessing`.
 2. Build a retrieval-ready source index from the main RAG dataset.
-3. Retrieve top-k rows for each question using a lightweight lexical baseline.
-4. Build a grounded prompt from retrieved evidence.
-5. Generate an answer through a backend adapter.
-6. Save predictions and evaluate them offline.
+3. Retrieve top-k rows for each question.
+4. Route the question into recommendation, comparison, fact lookup, knowledge, or meta response flow.
+5. For recommendation questions, enforce `EXACT_MATCH / NO_MATCH / UNKNOWN` before any fallback generation.
+6. Build a grounded prompt from retrieved evidence only when the query is not fully answered by the deterministic contract path.
+7. Generate an answer through a backend adapter.
+8. Save predictions and evaluate them offline.
+
+## Prerequisites
+
+- Python environment with `pandas`
+- `torch`
+- `transformers`
+- `accelerate`
+
+Recommended install command in the active Python environment:
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' -m pip install -U transformers accelerate
+```
+
+Gemma 4 model loading uses the official Hugging Face model ids by default:
+
+- `google/gemma-4-E2B-it`
+- `google/gemma-4-E4B-it`
+
+If you already have a local Hugging Face snapshot, point `local_dir` to that folder in `models.local.json`.
+
+## Local model setup
+
+1. Copy `02_gemma4_generation/config/models.local.example.json` to `02_gemma4_generation/config/models.local.json`
+2. Keep `hf_model_id` as-is, or replace `local_dir` with a local snapshot path
+3. Keep `models.local.json` uncommitted
+
+```powershell
+Copy-Item .\02_gemma4_generation\config\models.local.example.json .\02_gemma4_generation\config\models.local.json
+```
+
+## Runtime verification
+
+Run readiness checks before smoke tests:
+
+```powershell
+python .\02_gemma4_generation\verify_local_inference_setup.py
+python .\02_gemma4_generation\verify_local_inference_setup.py --model gemma4_2b
+python .\02_gemma4_generation\verify_local_inference_setup.py --model gemma4_4b
+```
+
+The verifier checks:
+
+- `transformers`, `torch`, `accelerate` import availability
+- `models.local.json` presence
+- `gemma4_2b` and `gemma4_4b` config resolution
+- optional `local_dir` existence when configured
 
 ## Scripts
 
@@ -81,42 +142,130 @@ Default stage outputs:
 python .\02_gemma4_generation\build_generation_assets.py
 ```
 
-What it does:
-
-- validates required upstream files and columns
-- creates a retrieval-ready source index
-- writes `data/eval/gemma4_generation_source_index.csv`
-
 ### 2. Run the MVP generation flow
 
 ```powershell
 python .\02_gemma4_generation\run_generation_mvp.py --mode eval --backend mock --model gemma4_2b
-python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend mock --model gemma4_2b
-python .\02_gemma4_generation\run_generation_mvp.py --mode eval --backend llama_cpp --model gemma4_2b
-python .\02_gemma4_generation\run_generation_mvp.py --mode eval --backend llama_cpp --model gemma4_4b
+python .\02_gemma4_generation\run_generation_mvp.py --mode eval --backend transformers --model gemma4_2b --limit 5
+python .\02_gemma4_generation\run_generation_mvp.py --mode eval --backend transformers --model gemma4_4b --limit 5
 ```
 
-What it does:
+### 2-1. Run local demo chatbot MVP
 
-- loads the source index
-- retrieves top-k evidence rows for each question
-- builds prompts
-- produces grounded answer candidates
+```powershell
+python .\02_gemma4_generation\demo_chatbot_mvp.py --backend transformers --model gemma4_2b --question "지하철 500m 이내 아파트 알려줘"
+python .\02_gemma4_generation\demo_chatbot_mvp.py --backend mock --model gemma4_2b
+```
 
-The default `mock` backend is included for regression checks and path validation.
+Demo output includes:
+- answer text
+- `answer_type`
+- `match_status`
+- `query_type`
+- `cited_doc_ids`
+- `top_doc_id`
+- `retrieval_score`
+- `used_fields`
+- `data_cutoff`
+- `limitations`
 
-The local runtime backend is `llama_cpp` and expects GGUF model files outside the repository.
+Demo scope and limitation:
+- This is a local demonstration path for pre-finetuning validation.
+- It is not yet a production-grade service endpoint.
 
-Package note:
+### 2-2. Run local web demo chatbot MVP
 
-- local inference requires `llama-cpp-python`
-- the package is imported lazily, so `mock` runs still work without it
+```powershell
+python .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8787
+```
 
-Recommended local config flow:
+Then open:
+- `http://127.0.0.1:8787`
+- Web page header shows current `backend/model_id`, confirm it is `transformers` for real generation quality.
+- Web response panel now shows `answer_type`, `match_status`, `query_type`, `data_cutoff`, `limitations`, and `used_fields`.
+- Web response panel also shows `device_map`, `model_source`, `last_load_ms`, and `last_generate_ms`.
+- For LAN access from another device, bind host to `0.0.0.0` and open `http://<your-local-ip>:8787`.
+- For access from completely different networks, use Cloudflare quick tunnel launcher:
+  - `run_web_demo_public_double_click.bat` (double-click)
+  - it prints a public `https://...trycloudflare.com` URL you can open from phone/mobile network.
 
-1. Copy `02_gemma4_generation/config/models.local.example.json` to `02_gemma4_generation/config/models.local.json`
-2. Update each `model_path`
-3. Keep the real file uncommitted
+The `mock` backend remains for regression checks. The primary runtime for real inference is now `transformers`.
+
+Runtime defaults for V2:
+
+- `max_output_tokens=96`
+- `temperature=0.0`
+- `top_p=1.0`
+- `repeat_penalty=1.05`
+- `request_timeout_seconds=20`
+- `web_timeout_seconds=25`
+- `device_map=auto` for the default local `gemma4_2b` runtime profile on constrained GPUs
+
+Timeout behavior:
+
+- deterministic contract path returns immediately without model generation
+- generation path records a soft-timeout limitation when latency exceeds the configured request timeout
+- web demo keeps serving the response but exposes the timeout state in `limitations` and `finish_reason`
+- transformers runtime now records split timing debug fields for load, prompt preparation, device transfer, generation, and decode
+
+Chunked execution options for large runs:
+
+- `--offset`: start row index from the selected question dataset
+- `--limit`: number of rows to process from `offset` (`None` means all remaining rows)
+- `--append`: append new rows to an existing prediction CSV instead of overwrite
+- `--resume`: skip already saved questions from the current output CSV and continue
+- `--checkpoint-every N`: save partial progress every N rows during a long run
+- `--log-every N`: print progress/ETA every N rows
+- `--startup-check` (default on): run a short startup probe before the long run
+- default startup probe is now `load_only` and does not force a generation call
+- `--startup-check-full`: run the full startup probe with a short generation sample
+- `--no-startup-check`: skip startup probe intentionally
+- `--profile fast_edge`: speed-oriented edge profile (shorter outputs + deterministic decoding)
+- `--max-output-tokens`, `--temperature`, `--top-p`, `--repeat-penalty`: runtime generation overrides
+- `--save-debug-columns`: persist `prompt_text`/`raw_response` in output CSV (off by default for long runs)
+- `--output-path`: write predictions to a custom CSV path (used by benchmark runs)
+- `--stop-signal-path`: file-based graceful stop signal path
+- `--heartbeat-path`: JSON heartbeat path used by status/monitor detection
+
+CPU inference behavior:
+
+- `transformers` runtime now auto-uses all logical CPU cores by default during CPU-only runs.
+- Optional per-model overrides in `models.local.json`:
+  - `cpu_threads`: intra-op CPU threads
+  - `cpu_interop_threads`: inter-op CPU threads (default `1`)
+- `llama_cpp` runtime now defaults `n_threads` to all logical CPU cores when not configured.
+
+Fast-edge tuning (current):
+
+- `--profile fast_edge` uses `max_output_tokens=64`, `temperature=0`, `top_p=1.0`
+- fast-edge retrieval uses top-2 context docs for lower prompt cost
+
+Resume safety behavior:
+
+- preferred: `source_row_index` matching (safe against duplicate question text)
+- legacy fallback: question-text matching only when old output files have no `source_row_index`
+- during save, duplicate `source_row_index` rows are automatically deduplicated
+
+Example for 50-row chunk execution:
+
+```powershell
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --offset 0 --limit 50
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --offset 50 --limit 50 --append
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --offset 100 --limit 50 --append
+```
+
+Resume with checkpoint example:
+
+```powershell
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --offset 0 --limit 50 --checkpoint-every 10
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --offset 0 --limit 50 --resume --append --checkpoint-every 10
+```
+
+Fast resume example for long edge runs:
+
+```powershell
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --resume --append --profile fast_edge --no-startup-check --checkpoint-every 25 --log-every 10
+```
 
 ### 3. Evaluate generation outputs
 
@@ -125,11 +274,102 @@ python .\02_gemma4_generation\evaluate_generation_mvp.py --mode eval --model gem
 python .\02_gemma4_generation\evaluate_generation_mvp.py --mode edge --model gemma4_2b
 ```
 
-What it does:
+### 3-1. Validate output completeness (no GPU)
 
-- checks retrieval hit rate
-- checks simple answer overlap metrics
-- writes metrics JSON files for both eval sets
+```powershell
+python .\02_gemma4_generation\validate_generation_outputs.py --mode edge --model gemma4_2b
+python .\02_gemma4_generation\validate_generation_outputs.py --mode eval --model gemma4_2b
+```
+
+### 3-2. Edge runbook helper (prepared, no auto GPU execution)
+
+The helper script prints safe command previews by default.
+Actual generation/evaluation runs only happen when `-Execute` is explicitly set.
+
+```powershell
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action print
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action precheck
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action benchmark -SampleSize 20
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action start -Offset 0 -Limit 0 -CheckpointEvery 25 -LogEvery 10
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action resume -Offset 0 -Limit 0 -CheckpointEvery 25 -LogEvery 10
+.\\02_gemma4_generation\\edge_runbook_2b.ps1 -Action stop
+.\\02_gemma4_generation\\edge_runbook_2b.ps1 -Action monitor -MonitorIntervalMinutes 10 -TargetRows 2000
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action status
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action finalize
+```
+
+Run with execution enabled only when you are ready:
+
+```powershell
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action start -Offset 0 -Limit 0 -CheckpointEvery 25 -LogEvery 10 -Execute
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action resume -Offset 0 -Limit 0 -CheckpointEvery 25 -LogEvery 10 -Execute
+.\\02_gemma4_generation\\edge_runbook_2b.ps1 -Action stop -Execute
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action resume -FastProfile -NoStartupCheck -Execute
+.\\02_gemma4_generation\\edge_runbook_2b.ps1 -Action monitor -MonitorIntervalMinutes 10 -TargetRows 2000 -Execute
+.\02_gemma4_generation\edge_runbook_2b.ps1 -Action finalize -Execute
+```
+
+Graceful stop behavior:
+
+- Stop signal file is watched between rows.
+- On stop detection, completed rows currently in memory are checkpoint-saved immediately.
+- The in-flight row may be dropped, then process exits cleanly.
+- Default stop signal path for edge 2b runbook:
+  - `data/eval/gemma4_generation_edge_predictions_gemma4_2b.stop`
+- Default heartbeat path for edge 2b runbook:
+  - `data/eval/gemma4_generation_edge_predictions_gemma4_2b.heartbeat.json`
+
+Direct stop-signal command:
+
+```powershell
+New-Item -ItemType File -Path .\data\eval\gemma4_generation_edge_predictions_gemma4_2b.stop -Force
+```
+
+Resume command after graceful stop:
+
+```powershell
+python .\02_gemma4_generation\run_generation_mvp.py --mode edge --backend transformers --model gemma4_2b --resume --append --profile fast_edge --no-startup-check --checkpoint-every 25 --log-every 10
+```
+
+Benchmark gate command:
+
+```powershell
+python .\02_gemma4_generation\benchmark_edge_2b.py --sample-size 20
+```
+
+Monitor command:
+
+```powershell
+python .\02_gemma4_generation\monitor_edge_progress.py --output-csv .\data\eval\gemma4_generation_edge_predictions_gemma4_2b.csv --target-rows 2000 --interval-minutes 10 --main-log-path .\logs\edge_2b_resume_20260406-143542.log --heartbeat-path .\data\eval\gemma4_generation_edge_predictions_gemma4_2b.heartbeat.json --benchmark-json-path .\logs\edge_2b_benchmark_20260406-140151.json
+```
+
+## Long-run prevention policy
+
+To avoid "stuck" misreads and wasted GPU time on long edge generation:
+
+1. Run benchmark gate first (`benchmark_edge_2b.py --sample-size 20`).
+2. Use `--profile fast_edge` for full edge-set runs unless quality validation requires default profile.
+3. Keep `--checkpoint-every` between 20 and 50 for resume safety with lower write overhead.
+4. Keep `--log-every` enabled so progress and ETA stay visible during long runs.
+5. Use `--resume --append` for every recovery run. Do not restart from scratch unless output contract changed.
+6. Keep 10-minute monitor active during long runs to track output freshness, heartbeat freshness, benchmark state, recent latency window, and GPU utilization.
+
+Detector verdicts:
+
+- `RUNNING_HEALTHY`: process alive, freshness signals healthy
+- `RUNNING_SLOW`: process alive, but recent latency window breached thresholds
+- `STALL_WARNING`: process missing or stale signals suggest trouble, but not enough evidence to confirm a stall
+- `STALL_CONFIRMED`: process missing and freshness signals stale beyond the confirmed threshold
+- `BLOCKED_BY_GATE`: benchmark gate blocked the full run before generation started
+
+Status command now reports:
+
+- total rows
+- max `source_row_index`
+- remaining rows
+- output/log/heartbeat freshness
+- benchmark pass/fail
+- detector verdict in one line
 
 ### 4. Compare 2B and 4B
 
@@ -137,26 +377,41 @@ What it does:
 python .\02_gemma4_generation\compare_generation_runs.py --mode eval --left-model gemma4_2b --right-model gemma4_4b
 ```
 
-What it does:
+## Smoke test commands
 
-- loads two metrics files
-- writes a small markdown comparison report
+Recommended execution order:
 
-## Backend plan
+```powershell
+python .\02_gemma4_generation\build_generation_assets.py
+python .\02_gemma4_generation\verify_local_inference_setup.py
+python .\02_gemma4_generation\run_generation_mvp.py --backend transformers --model gemma4_2b --mode eval --limit 5
+python .\02_gemma4_generation\evaluate_generation_mvp.py --mode eval --model gemma4_2b
+python .\02_gemma4_generation\run_generation_mvp.py --backend transformers --model gemma4_4b --mode eval --limit 5
+python .\02_gemma4_generation\evaluate_generation_mvp.py --mode eval --model gemma4_4b
+python .\02_gemma4_generation\compare_generation_runs.py --mode eval --left-model gemma4_2b --right-model gemma4_4b
+```
 
-Recommended backend sequence:
+## Common failures
 
-1. `mock`
-2. `llama_cpp` local Gemma 4 adapter
-3. later, optional prompt and retrieval improvements
-
-The point of the `mock` backend is not realism. It is to prove the stage contract, file paths, retrieval flow, and evaluation loop before adding model runtime complexity.
+- `transformers` or `accelerate` missing
+  - install the required packages in the active Python environment
+- Hugging Face access or cache issue
+  - confirm `hf_model_id` or `local_dir`
+- first-token latency spike on small VRAM GPUs
+  - confirm the runtime is using `device_map=auto`
+  - use the default load-only startup probe first
+  - inspect split timing fields before changing backend/runtime
+- GPU memory pressure on `gemma4_4b`
+  - validate `gemma4_2b` first
+  - keep `gemma4_4b` as the second smoke target
+- `llama_cpp` instability
+  - `llama_cpp` is now experimental and is no longer the default runtime path
 
 ## Runtime assumptions
 
-- Primary hardware target: NVIDIA GPU
-- Model format: GGUF
-- Runtime: `llama.cpp` via `llama-cpp-python`
+- Primary hardware target: NVIDIA GPU on Windows
+- Primary runtime: `transformers`
 - Default model IDs:
   - `gemma4_2b`
   - `gemma4_4b`
+- `llama_cpp` remains available only as an experimental backend

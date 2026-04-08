@@ -31,8 +31,8 @@ $HeartbeatPath = Join-Path $RepoRoot "data\eval\gemma4_generation_edge_predictio
 $LogsDir = Join-Path $RepoRoot "logs"
 
 function Invoke-Py {
-    param([string[]]$Args)
-    & $PythonExe @Args
+    param([string[]]$PyArgs)
+    & $PythonExe @PyArgs
 }
 
 function Get-RowCount {

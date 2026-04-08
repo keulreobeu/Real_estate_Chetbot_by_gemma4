@@ -169,6 +169,45 @@ data/eval/
 - `last_load_ms`
 - `last_generate_ms`
 
+## Docker Environment
+
+현재 작업 폴더를 그대로 마운트하는 재현 가능한 Docker 개발 환경을 추가했습니다.
+
+- 기본 범위:
+  - `01_preprocessing`
+  - `02_gemma4_generation`의 `transformers` 기반 경로
+- 기본 이미지 제외 항목:
+  - `llama_cpp`
+  - 로컬 GGUF 모델 파일
+
+빌드:
+
+```powershell
+docker compose build
+```
+
+셸 진입:
+
+```powershell
+docker compose run --rm chatbot-dev
+```
+
+컨테이너 내부 실행 예시:
+
+```bash
+python ./01_preprocessing/preprocess_apartment_pipeline.py
+python ./01_preprocessing/generate_apartment_qa_dataset.py
+python ./01_preprocessing/generate_edge_questions.py
+python ./02_gemma4_generation/build_generation_assets.py
+python ./02_gemma4_generation/verify_local_inference_setup.py
+```
+
+메모:
+
+- `data/`와 `00_Report/`는 이미지에 복사하지 않고 워크스페이스 볼륨으로 사용합니다.
+- Hugging Face 캐시는 `huggingface-cache` Docker 볼륨에 저장됩니다.
+- GPU runtime이 필요하면 NVIDIA Container Toolkit 기준의 추가 설정이 필요합니다.
+
 ## Common Commands
 
 ### Preprocessing

@@ -51,6 +51,22 @@ def read_gpu_util() -> str:
 def process_exists(pid: int | None) -> bool:
     if pid is None or pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    f"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return str(pid) == result.stdout.strip()
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

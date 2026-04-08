@@ -1,0 +1,13 @@
+.git
+.gitignore
+.agents
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.cache/
+data/
+00_Report/

@@ -94,6 +94,35 @@ The current MVP V2 runs with these defaults:
 - `transformers`
 - `accelerate`
 
+## Docker
+
+프로젝트 루트 기준 Docker 개발 환경을 사용할 수 있습니다.
+
+빌드:
+
+```powershell
+docker compose build
+```
+
+셸 진입:
+
+```powershell
+docker compose run --rm chatbot-dev
+```
+
+컨테이너 내부 readiness check:
+
+```bash
+python ./02_gemma4_generation/verify_local_inference_setup.py
+python ./02_gemma4_generation/verify_local_inference_setup.py --model gemma4_2b
+```
+
+주의:
+
+- Docker 기본 이미지는 `transformers` 경로를 기준으로 구성했습니다.
+- `llama_cpp`와 GGUF 모델 파일은 기본 이미지에 포함하지 않습니다.
+- `models.local.json`과 Hugging Face 캐시는 로컬 파일/볼륨으로 관리해야 합니다.
+
 Recommended install command in the active Python environment:
 
 ```powershell
@@ -235,6 +264,22 @@ CPU inference behavior:
   - `cpu_interop_threads`: inter-op CPU threads (default `1`)
 - `llama_cpp` runtime now defaults `n_threads` to all logical CPU cores when not configured.
 
+Non-GPU stage 04 readiness gate:
+
+- before resuming GPU work, run the contract/readiness check:
+
+```powershell
+python .\02_gemma4_generation\check_stage04_readiness.py --model gemma4_2b
+```
+
+- this gate compares:
+  - contract-required prediction columns
+  - evaluator-read columns
+  - actual current prediction CSV columns
+  - metric json required keys
+- `CONCLUSION=YES` means the current files are structurally ready for stage 04
+- `CONCLUSION=NO` means stage 04 metrics should not be treated as release-grade yet
+
 Fast-edge tuning (current):
 
 - `--profile fast_edge` uses `max_output_tokens=64`, `temperature=0`, `top_p=1.0`
@@ -279,6 +324,13 @@ python .\02_gemma4_generation\evaluate_generation_mvp.py --mode edge --model gem
 ```powershell
 python .\02_gemma4_generation\validate_generation_outputs.py --mode edge --model gemma4_2b
 python .\02_gemma4_generation\validate_generation_outputs.py --mode eval --model gemma4_2b
+```
+
+Optional output sanitization against the current input dataset:
+
+```powershell
+python .\02_gemma4_generation\sanitize_generation_outputs.py --mode edge --model gemma4_2b
+python .\02_gemma4_generation\sanitize_generation_outputs.py --mode edge --model gemma4_2b --write
 ```
 
 ### 3-2. Edge runbook helper (prepared, no auto GPU execution)

@@ -10,11 +10,14 @@ $runScript = Join-Path $PSScriptRoot "run_generation_mvp.py"
 $evalScript = Join-Path $PSScriptRoot "evaluate_generation_mvp.py"
 $validateScript = Join-Path $PSScriptRoot "validate_generation_outputs.py"
 $compareScript = Join-Path $PSScriptRoot "compare_generation_runs.py"
+$benchmarkScript = Join-Path $PSScriptRoot "benchmark_edge_2b.py"
 
 $edgeCsv = Join-Path $repo "data\eval\gemma4_generation_edge_predictions_gemma4_2b.csv"
 $evalCsv = Join-Path $repo "data\eval\gemma4_generation_eval_predictions_gemma4_2b.csv"
 $edgeMetrics = Join-Path $repo "data\eval\gemma4_generation_edge_metrics_gemma4_2b.json"
 $evalMetrics = Join-Path $repo "data\eval\gemma4_generation_eval_metrics_gemma4_2b.json"
+$stopSignalPath = Join-Path $repo "data\eval\gemma4_generation_edge_predictions_gemma4_2b.stop"
+$heartbeatPath = Join-Path $repo "data\eval\gemma4_generation_edge_predictions_gemma4_2b.heartbeat.json"
 
 $logDir = Join-Path $repo "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -28,8 +31,8 @@ function Write-Log {
 }
 
 function Invoke-Py {
-    param([string[]]$Args)
-    & $py @Args 2>&1 | Tee-Object -FilePath $logFile -Append
+    param([string[]]$PyArgs)
+    & $py @PyArgs 2>&1 | Tee-Object -FilePath $logFile -Append
     return $LASTEXITCODE
 }
 
@@ -65,17 +68,23 @@ while ((Get-Date) -lt $cutoff) {
     Write-Log "Progress edge_rows=$edgeRows/2000 eval_rows=$evalRows/1000"
 
     if ($edgeRows -lt 2000) {
+        Write-Log "Running edge benchmark gate."
+        Invoke-Py @($benchmarkScript, "--sample-size", "20") | Out-Null
         Write-Log "Running edge generation resume loop."
         $code = Invoke-Py @(
             $runScript,
             "--mode", "edge",
             "--backend", "transformers",
             "--model", "gemma4_2b",
+            "--profile", "fast_edge",
             "--offset", "0",
             "--resume",
             "--append",
             "--checkpoint-every", "$CheckpointEvery",
-            "--startup-check"
+            "--log-every", "10",
+            "--stop-signal-path", "$stopSignalPath",
+            "--heartbeat-path", "$heartbeatPath",
+            "--no-startup-check"
         )
         Write-Log "edge generation exit_code=$code"
         if ($code -ne 0) { Start-Sleep -Seconds 60 }
@@ -93,7 +102,8 @@ while ((Get-Date) -lt $cutoff) {
             "--resume",
             "--append",
             "--checkpoint-every", "$CheckpointEvery",
-            "--startup-check"
+            "--log-every", "10",
+            "--no-startup-check"
         )
         Write-Log "eval generation exit_code=$code"
         if ($code -ne 0) { Start-Sleep -Seconds 60 }
@@ -119,4 +129,3 @@ while ((Get-Date) -lt $cutoff) {
 }
 
 Write-Log "Worker ended. edge_rows=$(Get-RowCount $edgeCsv) eval_rows=$(Get-RowCount $evalCsv) stage04Done=$stage04Done"
-

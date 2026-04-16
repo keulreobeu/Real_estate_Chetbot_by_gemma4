@@ -20,12 +20,12 @@ OUTPUT_REPORT = REPORT_DIR / "04_edge_question_report.md"
 RANDOM_SEED = 42
 TOTAL_TARGET = 2000
 TYPE_TARGETS = {
-    "condition": 334,
-    "comparison": 334,
-    "multi_condition": 333,
-    "region": 333,
-    "vague": 333,
-    "colloquial": 333,
+    "condition": 250,
+    "comparison": 250,
+    "multi_condition": 250,
+    "region": 900,
+    "vague": 175,
+    "colloquial": 175,
 }
 ENCODINGS = ["utf-8-sig", "cp949", "euc-kr", "utf-8"]
 
@@ -310,23 +310,23 @@ def build_region_questions(df: pd.DataFrame, target: int, seen_questions: set[st
             f"{region} 아파트 뭐 있어",
             "region",
             pick_doc(subset, "세대수", False),
-            "시군구",
-            "RECOMMEND_STRUCTURED",
-            "EXACT_MATCH" if not subset.empty else "NO_MATCH",
-            must_not_recommend="Y" if subset.empty else "N",
+            "description",
+            "GENERAL_RETRIEVAL_QA",
+            "UNKNOWN",
+            must_not_recommend="N",
         )
     for dong in top_dongs:
         subset = df[df["동"] == dong]
         add_record(
             records,
             seen_questions,
-            f"{dong} 주변 단지 알려줘",
+            f"{dong} 대표 단지 특징 설명해줘",
             "region",
             pick_doc(subset, "세대수", False),
-            "동",
-            "RECOMMEND_STRUCTURED",
-            "EXACT_MATCH" if not subset.empty else "NO_MATCH",
-            must_not_recommend="Y" if subset.empty else "N",
+            "description",
+            "GENERAL_RETRIEVAL_QA",
+            "UNKNOWN",
+            must_not_recommend="N",
         )
 
     return records[:target]
@@ -479,6 +479,55 @@ def augment_questions(
                         if len(records) >= target:
                             return records[:target]
     elif qtype == "region":
+        retrieval_endings = [
+            "아파트 뭐 있어",
+            "대표 단지 특징 설명해줘",
+            "아파트 특징 요약해줘",
+            "단지 분위기 정리해줘",
+            "대표 아파트 알려줘",
+            "주요 단지 알려줘",
+            "단지 특징 알려줘",
+            "지역 대표 단지 정리해줘",
+            "지역 아파트 요약해줘",
+            "아파트 분위기 알려줘",
+            "주요 아파트 특징 설명해줘",
+            "대표 단지 요약해줘",
+            "아파트 정보 정리해줘",
+            "대표 아파트 특징 설명해줘",
+            "지역 단지 정보 알려줘",
+        ]
+        for region in top_regions or ["서울"]:
+            for ending in retrieval_endings:
+                add_record(
+                    records,
+                    seen_questions,
+                    f"{region} {ending}",
+                    qtype,
+                    "",
+                    "description",
+                    "GENERAL_RETRIEVAL_QA",
+                    "UNKNOWN",
+                    "N",
+                    "N",
+                )
+                if len(records) >= target:
+                    return records[:target]
+        for dong in top_dongs or ["지역"]:
+            for ending in retrieval_endings:
+                add_record(
+                    records,
+                    seen_questions,
+                    f"{dong} {ending}",
+                    qtype,
+                    "",
+                    "description",
+                    "GENERAL_RETRIEVAL_QA",
+                    "UNKNOWN",
+                    "N",
+                    "N",
+                )
+                if len(records) >= target:
+                    return records[:target]
         prefixes = ["주변", "라인", "권역", "쪽"]
         endings = ["아파트 알려줘", "단지 뭐 있어", "추천해줘", "후보 보여줘"]
         for region in top_regions or ["서울"]:

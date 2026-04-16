@@ -8,12 +8,12 @@
 ## 유형별 개수
 | type | count |
 | --- | --- |
-| condition | 334 |
-| comparison | 334 |
-| multi_condition | 333 |
-| region | 333 |
-| vague | 333 |
-| colloquial | 333 |
+| region | 900 |
+| condition | 250 |
+| comparison | 250 |
+| multi_condition | 250 |
+| vague | 175 |
+| colloquial | 175 |
 
 ## 생성 규칙 요약
 - 추천형 질문에는 expected_router_type과 expected_match_status를 함께 기록했습니다.

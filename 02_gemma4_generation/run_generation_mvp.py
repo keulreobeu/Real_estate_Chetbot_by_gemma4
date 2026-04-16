@@ -16,6 +16,7 @@ from common import (
     INPUT_MAIN,
     OUTPUT_SOURCE_INDEX,
     append_citation,
+    build_grounded_retrieval_answer,
     build_prompt,
     fallback_answer,
     get_prediction_output_path,
@@ -502,44 +503,14 @@ def main() -> None:
                 match_status = "UNKNOWN"
                 query_type = "GENERAL_RETRIEVAL_QA"
             else:
-                prompt_text = build_prompt(question, retrieved_df)
-                try:
-                    inference_result = run_backend(
-                        backend=backend,
-                        prompt_text=prompt_text,
-                        model_config=model_config,
-                        generation_config=generation_config,
-                    )
-                except FileNotFoundError as exc:
-                    runtime = str(model_config.get("runtime"))
-                    if runtime == "transformers":
-                        raise RuntimeError(
-                            f"Transformers model source not found: {exc}. Check local_dir or hf_model_id in models.local.json."
-                        ) from exc
-                    raise RuntimeError(
-                        f"Model file not found: {exc}. Check model_path and file existence in models.local.json."
-                    ) from exc
-                except ImportError as exc:
-                    raise RuntimeError(
-                        f"Could not import local inference runtime: {exc}. Check required packages for the backend."
-                    ) from exc
-                except Exception as exc:
-                    raise RuntimeError(f"Local inference execution failed: {exc}") from exc
-
-                if safe_text(inference_result.text):
-                    answer = append_citation(safe_text(inference_result.text), cited_doc_ids)
-                    insufficient_context = False
-                else:
-                    answer = fallback_answer(cited_doc_ids)
-                    insufficient_context = True
-                finish_reason = inference_result.finish_reason
-                latency_ms = inference_result.latency_ms
-                raw_response = inference_result.raw_response
-                runtime_debug = extract_runtime_debug(raw_response)
-                token_usage = inference_result.token_usage if isinstance(inference_result.token_usage, dict) else {}
-                prompt_tokens = int(token_usage.get("prompt_tokens", 0) or 0)
-                completion_tokens = int(token_usage.get("completion_tokens", 0) or 0)
-                total_tokens = int(token_usage.get("total_tokens", prompt_tokens + completion_tokens) or 0)
+                answer = append_citation(build_grounded_retrieval_answer(question, retrieved_df), cited_doc_ids)
+                insufficient_context = False
+                finish_reason = "retrieval_contract"
+                latency_ms = 0
+                raw_response = None
+                prompt_tokens = 0
+                completion_tokens = 0
+                total_tokens = 0
                 answer_type = "grounded_generation"
                 match_status = "UNKNOWN"
                 query_type = "GENERAL_RETRIEVAL_QA"

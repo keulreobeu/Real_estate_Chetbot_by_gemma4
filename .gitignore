@@ -18,6 +18,8 @@ env/
 .ruff_cache/
 .ipynb_checkpoints/
 .agents/
+logs/
+tools/
 *.log
 *.tmp
 *.bak

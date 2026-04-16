@@ -283,6 +283,40 @@ def build_context_block(retrieved_df: pd.DataFrame) -> str:
     return "\n\n".join(blocks)
 
 
+def build_grounded_retrieval_answer(question: str, retrieved_df: pd.DataFrame) -> str:
+    if retrieved_df.empty:
+        return DEFAULT_FALLBACK_ANSWER
+
+    lines = ["질문과 관련된 단지 정보입니다."]
+    for _, row in retrieved_df.head(3).iterrows():
+        apartment_name = safe_text(row.get("아파트명")) or "단지명 미상"
+        description = safe_text(row.get("description"))
+        district = safe_text(row.get("시군구"))
+        dong = safe_text(row.get("동"))
+        station = safe_text(row.get("가장가까운역"))
+        distance = format_number(row.get("거리_m"))
+
+        detail_bits: list[str] = []
+        if district:
+            detail_bits.append(district)
+        if dong:
+            detail_bits.append(dong)
+        if station:
+            if distance:
+                detail_bits.append(f"{station} {distance}m")
+            else:
+                detail_bits.append(station)
+
+        summary = description or ", ".join(detail_bits)
+        if summary:
+            lines.append(f"- {apartment_name}: {summary}")
+        else:
+            lines.append(f"- {apartment_name}")
+
+    lines.append("데이터 기준은 저장된 아파트 문서 요약입니다.")
+    return "\n".join(lines)
+
+
 @lru_cache(maxsize=1)
 def load_prompt_template() -> str:
     if not PROMPT_FILE.exists():

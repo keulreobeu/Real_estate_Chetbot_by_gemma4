@@ -14,7 +14,7 @@ Primary project goals:
 - prepare the project for future Gemma 4 generation and evaluation stages
 
 Current active stage:
-- `01_preprocessing`
+- `06_finetuning`
 
 ## Repository structure
 
@@ -23,14 +23,23 @@ Use the current repository structure as the default standard.
 - `00_Report`
   - reports and processing logs
 - `01_preprocessing`
-  - current active stage
   - preprocessing, RAG build, QA generation, edge question generation scripts
+- `03_generation_optimization`
+  - upstream optimization gate before finetuning
+  - recommendation safety, routing, match-status optimization gate before finetuning
+- `05_finetuning_prep`
+  - SFT candidate separation, holdout generation, train-valid JSONL preparation
+- `06_finetuning`
+  - active stage after `stage06_readiness = GO`
+  - finetuning run contract, runbook, and post-train evaluation gate
 - `data/original`
   - raw source CSV files
 - `data`
   - processed and RAG-ready main datasets
 - `data/qa`
   - QA base, QA dataset, finetune JSONL, evaluation, edge questions
+- `data/qa/finetuning_prep`
+  - stage 05 candidate, rejected, holdout, and train-valid artifacts
 
 Optional shared directories when needed:
 - `shared/`
@@ -39,6 +48,7 @@ Optional shared directories when needed:
 - `data/mapping`
 - `data/eval`
 - `logs`
+- `data/eval/generation_optimization`
 
 ## Working style
 
@@ -398,6 +408,17 @@ Current common command pattern in this repository:
   - `python .\01_preprocessing\generate_apartment_qa_dataset.py`
 - edge question generation:
   - `python .\01_preprocessing\generate_edge_questions.py`
+- finetuning prep:
+  - `python .\05_finetuning_prep\prepare_sft_dataset.py --model gemma4_2b`
+- finetuning:
+  - `python .\06_finetuning\create_run_manifest.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b`
+  - `python .\06_finetuning\train_finetuning_baseline.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b`
+  - `python .\06_finetuning\train_finetuning_baseline.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b --max-seq-length 512 --training-scope gates_and_norms`
+  - `python .\06_finetuning\generate_post_train_prediction_sets.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b`
+  - `python .\06_finetuning\evaluate_post_finetuning_run.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b`
+- generation optimization:
+  - `python .\03_generation_optimization\analyze_edge_failures.py --model gemma4_2b`
+  - `python .\05_finetuning_prep\validate_06_readiness.py --model gemma4_2b`
 
 ## Reporting format
 

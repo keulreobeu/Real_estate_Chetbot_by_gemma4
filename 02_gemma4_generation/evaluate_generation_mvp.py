@@ -40,6 +40,20 @@ def excludes_forbidden(answer: str, forbidden_text: str) -> bool:
     return normalize_text(forbidden_text) not in normalize_text(answer)
 
 
+DISCLOSURE_HINTS = (
+    "현재 데이터로는",
+    "판단할 수 없습니다",
+    "데이터 기준일",
+    "답변 가능 범위",
+    "비교 기준",
+)
+
+
+def has_limit_disclosure(answer: str) -> bool:
+    normalized = normalize_text(answer)
+    return any(normalize_text(hint) in normalized for hint in DISCLOSURE_HINTS)
+
+
 def evaluate_eval(model_id: str) -> None:
     predictions_df, _ = load_csv(get_prediction_output_path("eval", model_id))
 
@@ -57,12 +71,12 @@ def evaluate_eval(model_id: str) -> None:
     for _, row in predictions_df.iterrows():
         answer = str(row.get("answer", ""))
         expected_answer = str(row.get("expected_answer", ""))
-        expected_doc = str(row.get("expected_doc_id", ""))
-        cited_doc_ids = str(row.get("cited_doc_ids", "")).split("|")
+        expected_doc = safe_text(row.get("expected_doc_id", ""))
+        cited_doc_ids = safe_text(row.get("cited_doc_ids", "")).split("|")
         normalized_answer = normalize_text(answer)
         normalized_expected = normalize_text(expected_answer)
-        expected_answer_type = str(row.get("expected_answer_type", ""))
-        expected_match_status = str(row.get("expected_match_status", ""))
+        expected_answer_type = safe_text(row.get("expected_answer_type", ""))
+        expected_match_status = safe_text(row.get("expected_match_status", ""))
         must_include = safe_text(row.get("must_include", ""))
         must_not_include = safe_text(row.get("must_not_include", ""))
 
@@ -75,9 +89,9 @@ def evaluate_eval(model_id: str) -> None:
         if bool(row.get("insufficient_context")):
             insufficient_context += 1
         latency_total += float(row.get("latency_ms", 0) or 0)
-        if expected_answer_type and expected_answer_type == str(row.get("answer_type", "")):
+        if expected_answer_type and expected_answer_type == safe_text(row.get("answer_type", "")):
             answer_type_matches += 1
-        if expected_match_status and expected_match_status == str(row.get("match_status", "")):
+        if expected_match_status and expected_match_status == safe_text(row.get("match_status", "")):
             match_status_matches += 1
         if contains_required(answer, must_include):
             must_include_passes += 1
@@ -116,15 +130,15 @@ def evaluate_edge(model_id: str) -> None:
     disclose_limit_passes = 0
 
     for _, row in predictions_df.iterrows():
-        expected_doc = str(row.get("expected_doc", ""))
-        expected_field = str(row.get("expected_field", ""))
-        cited_doc_ids = str(row.get("cited_doc_ids", "")).split("|")
-        used_fields = str(row.get("used_fields", "")).split("|")
-        expected_router_type = str(row.get("expected_router_type", ""))
-        expected_match_status = str(row.get("expected_match_status", ""))
-        must_not_recommend = str(row.get("must_not_recommend", ""))
-        must_disclose_limit = str(row.get("must_disclose_limit", ""))
-        answer = str(row.get("answer", ""))
+        expected_doc = safe_text(row.get("expected_doc", ""))
+        expected_field = safe_text(row.get("expected_field", ""))
+        cited_doc_ids = safe_text(row.get("cited_doc_ids", "")).split("|")
+        used_fields = safe_text(row.get("used_fields", "")).split("|")
+        expected_router_type = safe_text(row.get("expected_router_type", ""))
+        expected_match_status = safe_text(row.get("expected_match_status", ""))
+        must_not_recommend = safe_text(row.get("must_not_recommend", ""))
+        must_disclose_limit = safe_text(row.get("must_disclose_limit", ""))
+        answer = safe_text(row.get("answer", ""))
 
         if expected_doc and expected_doc in cited_doc_ids:
             doc_hits += 1
@@ -133,18 +147,17 @@ def evaluate_edge(model_id: str) -> None:
         if bool(row.get("insufficient_context")):
             insufficient_context += 1
         latency_total += float(row.get("latency_ms", 0) or 0)
-        if expected_router_type and expected_router_type == str(row.get("query_type", "")):
+        if expected_router_type and expected_router_type == safe_text(row.get("query_type", "")):
             router_matches += 1
-        if expected_match_status and expected_match_status == str(row.get("match_status", "")):
+        if expected_match_status and expected_match_status == safe_text(row.get("match_status", "")):
             match_status_matches += 1
         if must_not_recommend == "Y":
-            no_recommend_passes += int(not str(row.get("top_doc_id", "")).strip())
-        else:
-            no_recommend_passes += 1
+            no_recommend_passes += int(not safe_text(row.get("top_doc_id", "")))
         if must_disclose_limit == "Y":
-            disclose_limit_passes += int("현재 MVP에서는" in answer or "판단할 수 없습니다" in answer)
-        else:
-            disclose_limit_passes += 1
+            disclose_limit_passes += int(has_limit_disclosure(answer))
+
+    must_not_total = int((predictions_df["must_not_recommend"].fillna("").astype(str).map(safe_text) == "Y").sum())
+    must_disclose_total = int((predictions_df["must_disclose_limit"].fillna("").astype(str).map(safe_text) == "Y").sum())
 
     metrics = {
         "model_id": model_id,
@@ -153,8 +166,8 @@ def evaluate_edge(model_id: str) -> None:
         "field_hit_rate": field_hits / total_questions if total_questions else 0.0,
         "router_match_rate": router_matches / total_questions if total_questions else 0.0,
         "match_status_match_rate": match_status_matches / total_questions if total_questions else 0.0,
-        "must_not_recommend_pass_rate": no_recommend_passes / total_questions if total_questions else 0.0,
-        "must_disclose_limit_pass_rate": disclose_limit_passes / total_questions if total_questions else 0.0,
+        "must_not_recommend_pass_rate": no_recommend_passes / must_not_total if must_not_total else 1.0,
+        "must_disclose_limit_pass_rate": disclose_limit_passes / must_disclose_total if must_disclose_total else 1.0,
         "insufficient_context_rate": insufficient_context / total_questions if total_questions else 0.0,
         "avg_latency_ms": latency_total / total_questions if total_questions else 0.0,
     }

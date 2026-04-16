@@ -1,5 +1,7 @@
 param(
-    [int]$CheckpointEvery = 10
+    [int]$CheckpointEvery = 10,
+    [int]$CutoffHour = 14,
+    [int]$CutoffMinute = 0
 )
 
 $ErrorActionPreference = "Continue"
@@ -11,6 +13,7 @@ $evalScript = Join-Path $PSScriptRoot "evaluate_generation_mvp.py"
 $validateScript = Join-Path $PSScriptRoot "validate_generation_outputs.py"
 $compareScript = Join-Path $PSScriptRoot "compare_generation_runs.py"
 $benchmarkScript = Join-Path $PSScriptRoot "benchmark_edge_2b.py"
+$readinessScript = Join-Path $PSScriptRoot "check_stage04_readiness.py"
 
 $edgeCsv = Join-Path $repo "data\eval\gemma4_generation_edge_predictions_gemma4_2b.csv"
 $evalCsv = Join-Path $repo "data\eval\gemma4_generation_eval_predictions_gemma4_2b.csv"
@@ -22,7 +25,7 @@ $heartbeatPath = Join-Path $repo "data\eval\gemma4_generation_edge_predictions_g
 $logDir = Join-Path $repo "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$logFile = Join-Path $logDir "pipeline_until_1400_$stamp.log"
+$logFile = Join-Path $logDir "pipeline_until_${CutoffHour}$("{0:D2}" -f $CutoffMinute)_$stamp.log"
 
 function Write-Log {
     param([string]$Message)
@@ -52,7 +55,7 @@ function Get-RowCount {
 }
 
 Set-Location $repo
-$cutoff = Get-Date -Hour 14 -Minute 0 -Second 0
+$cutoff = Get-Date -Hour $CutoffHour -Minute $CutoffMinute -Second 0
 Write-Log "Pipeline worker started. cutoff=$($cutoff.ToString('yyyy-MM-dd HH:mm:ss'))"
 
 if ((Get-Date) -ge $cutoff) {
@@ -122,6 +125,9 @@ while ((Get-Date) -lt $cutoff) {
     }
 
     Write-Log "Starting next tasks (post-04, non-GPU validation track)."
+    if (Test-Path $readinessScript) {
+        Invoke-Py @($readinessScript, "--model", "gemma4_2b") | Out-Null
+    }
     Invoke-Py @($validateScript, "--mode", "edge", "--model", "gemma4_2b") | Out-Null
     Invoke-Py @($validateScript, "--mode", "eval", "--model", "gemma4_2b") | Out-Null
     Write-Log "Post-04 tasks executed. Worker exiting."

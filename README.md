@@ -5,7 +5,7 @@
 
 현재 활성 stage:
 
-- `01_preprocessing`
+- `06_finetuning`
 
 현재 generation 실험 stage:
 
@@ -38,6 +38,16 @@
   - `device_map="auto"`를 기본값으로 사용
   - startup check를 `load_only`와 `full generation probe`로 분리
   - `transformers` runtime timing/debug 메타를 예측 CSV와 웹 응답에 노출
+- stage `02_gemma4_generation` 완료
+  - edge predictions `2000/2000`
+  - eval predictions `1000/1000`
+  - stage 04 metrics와 readiness gate 완료
+- stage `05_finetuning_prep` 부트스트랩 완료
+  - `data/qa/finetuning_prep/`에 candidate/rejected/holdout/train-valid JSONL 생성
+- stage `03_generation_optimization` 준비 게이트 추가
+  - recommendation safety / routing / match-status 실패 버킷을 분석
+  - 면적대(`소형`, `중형`, `중소형`, `중대형`, `대형`) 조건은 추천 대신 `UNKNOWN`으로 처리
+- 현재 `06_finetuning` 진입 판정은 `GO`
 
 주의:
 
@@ -51,11 +61,21 @@
   처리 보고서와 로그
 
 01_preprocessing/
-  현재 활성 stage
   전처리, RAG 준비, QA 생성, edge 질문 생성
 
 02_gemma4_generation/
   Gemma 4 generation MVP, query routing, evaluation
+
+03_generation_optimization/
+  upstream optimization gate before finetuning
+  recommendation safety, routing, match-status optimization gate
+
+05_finetuning_prep/
+  SFT 후보 분리, holdout 구성, train/valid JSONL 준비
+
+06_finetuning/
+  active stage after readiness GO
+  finetuning contract, runbook, checklist, and post-train evaluation plan
 
 data/original/
   원본 CSV
@@ -66,8 +86,14 @@ data/
 data/qa/
   QA base, QA dataset, evaluation, edge dataset, knowledge base
 
+data/qa/finetuning_prep/
+  stage 05 candidate/rejected/holdout/train-valid artifacts
+
 data/eval/
   generation source index, prediction CSV, metrics JSON
+
+data/eval/generation_optimization/
+  stage 03 failure buckets, hard-negative review queue, regeneration plan
 ```
 
 ## Main Artifacts
@@ -80,6 +106,7 @@ data/eval/
   - generation eval 질문 세트
 - `data/qa/edge_case_eval.csv`
   - edge/제한 응답 검증용 질문 세트
+  - `RECOMMEND_STRUCTURED`, `RECOMMEND_COMPARATIVE`, `GENERAL_RETRIEVAL_QA` 기대 라우터를 함께 포함
 - `data/qa/real_estate_knowledge_base.csv`
   - 일반 부동산 지식 사전
 - `data/eval/gemma4_generation_source_index.csv`
@@ -224,6 +251,52 @@ python ./02_gemma4_generation/verify_local_inference_setup.py
 & 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\build_generation_assets.py
 ```
 
+### Prepare finetuning datasets
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\05_finetuning_prep\prepare_sft_dataset.py --model gemma4_2b
+```
+
+### Prepare a finetuning run manifest
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\create_run_manifest.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b
+```
+
+### Run the baseline finetuning job
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\train_finetuning_baseline.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b --max-seq-length 512 --training-scope gates_and_norms
+```
+
+### Generate post-train prediction sets
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\generate_post_train_prediction_sets.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b
+```
+
+### Evaluate a completed finetuning run
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\evaluate_post_finetuning_run.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b
+```
+
+### Analyze generation optimization blockers
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\03_generation_optimization\analyze_edge_failures.py --model gemma4_2b
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\05_finetuning_prep\validate_06_readiness.py --model gemma4_2b
+```
+
+### Overnight stage 05 to 06 pipeline
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\run_overnight_stage05_to_06.ps1
+```
+
+This worker resumes the interrupted staging edge regeneration, promotes the validated staging output to canonical,
+re-runs stage 04 metrics, regenerates stage 05 finetuning prep outputs, and refreshes the stage 06 readiness verdict.
+
 ### CLI demo
 
 ```powershell
@@ -237,6 +310,11 @@ python ./02_gemma4_generation/verify_local_inference_setup.py
 & 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend mock --model gemma4_2b --host 127.0.0.1 --port 8787
 & 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8787
 ```
+
+- Web demo 상단 카드에서 데이터 포함 지역(`서울권`, `경기권`, `인천권`)과 포함된 `시군구`를 확인할 수 있습니다.
+- `규칙기반 답변 확인`은 고정 질문 `데이터 기준 알려줘`로 빠른 계약 기반 응답 경로를 점검합니다.
+- `Gemma 생성 가능 상태 확인`은 장문 답변 대신 짧은 readiness probe만 실행합니다.
+- 중복 실행으로 포트 충돌이나 모델 중복 로딩이 생기지 않도록, 기존 서버가 실행 중인지 먼저 확인하고 같은 포트에는 한 서버만 유지하세요.
 
 ### Eval run
 

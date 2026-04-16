@@ -29,6 +29,11 @@ The current MVP V2 runs with these defaults:
 - deterministic contract path first for recommendation, comparison, fact, knowledge, and meta queries
 - generation path only for `GENERAL_RETRIEVAL_QA`
 - recommendation safety rule: `NO_MATCH` and `UNKNOWN` never show arbitrary apartment candidates
+- structured recommendation supports objective filters such as price, area band, subway distance, and park/hospital access
+- implicit `역 가까운` requests are treated as a bounded near-subway filter (default `500m`) so far-away stations do not produce false exact-match recommendations
+- vague recommendation phrases such as broad region-only asks or unsupported qualifier asks are routed to safe `UNKNOWN`
+- subjective quality asks such as `괜찮은`, `무난한`, `추천할 만한`, and `실거주 괜찮은` are treated as unsupported comparative requests rather than structured recommendation
+- region-scoped explanation prompts such as `화성시 아파트 뭐 있어` and `동탄동 대표 단지 특징 설명해줘` are routed to `GENERAL_RETRIEVAL_QA` so grounded generation remains covered in edge evaluation
 - public demo recommendation: `transformers --model gemma4_2b`
 
 ## Inputs
@@ -211,14 +216,25 @@ python .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend transformers --m
 Then open:
 - `http://127.0.0.1:8787`
 - Web page header shows current `backend/model_id`, confirm it is `transformers` for real generation quality.
+- Web page top cards now show included regions grouped as `서울권`, `경기권`, and `인천권`.
+- The UI now separates `규칙기반 답변 확인` from `Gemma 생성 가능 상태 확인`.
+- `규칙기반 답변 확인` runs a fixed fast contract question: `데이터 기준 알려줘`
+- `Gemma 생성 가능 상태 확인` runs a short readiness probe instead of a full user-facing long answer.
 - Web response panel now shows `answer_type`, `match_status`, `query_type`, `data_cutoff`, `limitations`, and `used_fields`.
 - Web response panel also shows `device_map`, `model_source`, `last_load_ms`, and `last_generate_ms`.
+- Current status card also shows `pid`, `port`, startup time, and latest readiness state.
 - For LAN access from another device, bind host to `0.0.0.0` and open `http://<your-local-ip>:8787`.
 - For access from completely different networks, use Cloudflare quick tunnel launcher:
   - `run_web_demo_public_double_click.bat` (double-click)
   - it prints a public `https://...trycloudflare.com` URL you can open from phone/mobile network.
 
 The `mock` backend remains for regression checks. The primary runtime for real inference is now `transformers`.
+
+Usage notes:
+
+- Keep one web demo server per port to avoid port conflicts and duplicate model loading.
+- The readiness button is for runtime verification only, not for judging answer quality.
+- If a readiness probe or another generation request is already running, the UI reports the runtime as busy instead of starting another generation task.
 
 Runtime defaults for V2:
 
@@ -279,6 +295,15 @@ python .\02_gemma4_generation\check_stage04_readiness.py --model gemma4_2b
   - metric json required keys
 - `CONCLUSION=YES` means the current files are structurally ready for stage 04
 - `CONCLUSION=NO` means stage 04 metrics should not be treated as release-grade yet
+
+Long-running orchestration worker:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\02_gemma4_generation\run_pipeline_until_1400.ps1 -CheckpointEvery 10 -CutoffHour 23 -CutoffMinute 0
+```
+
+- resumes `edge`, then `eval`, then runs stage 04 metrics
+- after stage 04 it also runs the stage 04 readiness gate and non-GPU validation steps
 
 Fast-edge tuning (current):
 

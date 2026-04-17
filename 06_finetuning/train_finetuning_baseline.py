@@ -16,11 +16,13 @@ from transformers import (
 )
 
 from common import (
+    contextual_summary_is_accepted,
     DEFAULT_MODEL_ID,
     PROJECT_ROOT,
     build_run_dir,
     build_sft_prompt,
     build_sft_training_text,
+    build_sft_user_content,
     load_json,
     load_model_config,
 )
@@ -43,9 +45,10 @@ class JsonlSftDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         record = self.records[index]
-        prompt = build_sft_prompt(record.get("instruction", ""), tokenizer=self.tokenizer)
+        user_content = build_sft_user_content(record.get("instruction", ""), record.get("input", ""))
+        prompt = build_sft_prompt(user_content, tokenizer=self.tokenizer)
         full_text = build_sft_training_text(
-            record.get("instruction", ""),
+            user_content,
             str(record.get("output", "")),
             tokenizer=self.tokenizer,
         )
@@ -88,7 +91,7 @@ class DataCollatorForCausalLm:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a baseline full finetuning job from a frozen stage 06 manifest.")
+    parser = argparse.ArgumentParser(description="Run a stage 06 finetuning job from a frozen or run-local stage 06 manifest.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--run-dir", default=None)
@@ -99,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
-    parser.add_argument("--max-seq-length", type=int, default=1024)
+    parser.add_argument("--max-seq-length", type=int, default=512)
     parser.add_argument("--save-steps", type=int, default=50)
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--save-total-limit", type=int, default=2)
@@ -183,10 +186,22 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    train_path = Path(manifest["frozen_inputs"]["train_file"]["path"])
-    valid_path = Path(manifest["frozen_inputs"]["valid_file"]["path"])
+    run_local_inputs = manifest.get("run_local_inputs", {})
+    train_path = Path(run_local_inputs.get("selected_train_file", {}).get("path", manifest["frozen_inputs"]["train_file"]["path"]))
+    valid_path = Path(run_local_inputs.get("selected_valid_file", {}).get("path", manifest["frozen_inputs"]["valid_file"]["path"]))
     train_path = train_path if train_path.is_absolute() else PROJECT_ROOT / train_path
     valid_path = valid_path if valid_path.is_absolute() else PROJECT_ROOT / valid_path
+    contextual_selection_mode = run_local_inputs.get("contextual_selection_mode", "")
+    if contextual_selection_mode == "accepted_contextual":
+        contextual_summary_path = run_dir / "context_build_summary.json"
+        contextual_summary = load_json(contextual_summary_path)
+        if not contextual_summary_is_accepted(contextual_summary):
+            raise RuntimeError("Manifest selected contextual inputs without an accepted context build summary.")
+        expected_max_seq_length = int(contextual_summary["selected_schema_budget"]["max_seq_length"])
+        if args.max_seq_length != expected_max_seq_length:
+            raise RuntimeError(
+                f"max_seq_length mismatch: trainer={args.max_seq_length} contextual_build={expected_max_seq_length}"
+            )
     train_dataset = JsonlSftDataset(train_path, tokenizer, args.max_seq_length)
     eval_dataset = JsonlSftDataset(valid_path, tokenizer, args.max_seq_length)
 
@@ -226,8 +241,8 @@ def main() -> None:
         "base_model_id": manifest.get("base_model_id", args.model),
         "training_method": "trainer_partial_finetune" if args.training_scope != "full" else "full_finetune_trainer",
         "adapter_or_full_finetune": "partial" if args.training_scope != "full" else "full",
-        "train_file": manifest["frozen_inputs"]["train_file"]["path"],
-        "valid_file": manifest["frozen_inputs"]["valid_file"]["path"],
+        "train_file": str(train_path.relative_to(PROJECT_ROOT)) if train_path.is_absolute() else str(train_path),
+        "valid_file": str(valid_path.relative_to(PROJECT_ROOT)) if valid_path.is_absolute() else str(valid_path),
         "grounded_holdout_file": manifest["frozen_inputs"]["grounded_holdout_file"]["path"],
         "edge_safety_holdout_file": manifest["frozen_inputs"]["edge_safety_holdout_file"]["path"],
         "trainable_parameter_summary": trainable_summary,

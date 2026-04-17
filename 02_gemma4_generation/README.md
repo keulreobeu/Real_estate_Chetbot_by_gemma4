@@ -58,8 +58,12 @@ The current MVP V2 runs with these defaults:
   README.md
   CONTRACT.md
   common.py
+  api_logging.py
+  api_models.py
+  api_runtime.py
   build_generation_assets.py
   verify_local_inference_setup.py
+  fastapi_app.py
   run_generation_mvp.py
   demo_chatbot_mvp.py
   demo_chatbot_web_mvp.py
@@ -212,6 +216,27 @@ Demo scope and limitation:
 ```powershell
 python .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8787
 ```
+
+### 2-3. Run FastAPI service
+
+```powershell
+python .\02_gemma4_generation\fastapi_app.py --backend mock --model gemma4_2b --host 127.0.0.1 --port 8788
+python .\02_gemma4_generation\fastapi_app.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8788
+```
+
+FastAPI v1 keeps the same public API meaning as the web MVP JSON endpoints:
+
+- `GET /api/status`
+- `POST /api/ask`
+- `POST /api/check-rule`
+- `POST /api/check-generation-ready`
+
+Operational notes:
+
+- FastAPI is the formal API layer for service-facing integration.
+- The existing web MVP remains as a separate demo entry point and now uses the same shared runtime path for startup and request handling.
+- JSONL request logs are written under `logs/api_requests/fastapi_YYYYMMDD.jsonl`.
+- `NO_MATCH` and `UNKNOWN` safety behavior remains unchanged.
 
 Then open:
 - `http://127.0.0.1:8787`

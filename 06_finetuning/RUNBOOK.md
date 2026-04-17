@@ -2,64 +2,91 @@
 
 ## Goal
 
-Run one baseline finetuning job from the frozen stage 05 dataset and evaluate it before any sweep or second run.
+Run one schema-first context-aware finetuning attempt for `baseline-gemma4-2b-r3`
+without mutating stage 05 canonical artifacts.
 
 ## Pre-Run Sequence
 
 1. confirm the latest readiness verdict is still `GO`
-2. copy the exact source artifact paths into the run manifest
-3. create the run manifest
-4. choose one baseline training method
-5. choose one output directory
-6. request user approval for the actual training command
+2. lock `context-aware input schema v1`
+3. build the run-local contextual train/valid view
+4. verify contextual row counts, excluded no-context rows, and token budget
+5. create the run manifest
+6. request user approval for the actual GPU training command
 
 ## Baseline Recommendation
 
-Use one conservative baseline only:
+Stay on the proven local path:
 
 - one base model
-- one adapter strategy
+- one run id
+- one unified compressed schema
 - one train split
-- one validation split
-- no multi-run sweep
-- on the local 8GB GPU, default to `gates_and_norms` partial finetuning instead of full finetuning
+- one valid split
+- no sweep
+- `gates_and_norms` partial finetune
+- `max_seq_length = 512`
+- accepted r3 compression defaults:
+  - `max_docs = 1`
+  - `max_description_chars = 12`
 
-This keeps the first run attributable and easy to compare against the pre-finetuning baseline.
+## Required Run-Local Artifacts
 
-## Suggested Run Manifest
+Before training, the run directory should contain:
 
-Create a run-specific note with:
-
-- run id
-- date
-- source dataset summary path
-- readiness path
-- chosen model
-- chosen training method
-- output directory
-- expected evaluation outputs
+- `schema_v1.md`
+- `train_contextual.jsonl`
+- `valid_contextual.jsonl`
+- `context_build_summary.json`
+- `context_build_summary.json` must show:
+  - `builder_pass = true`
+  - `schema_status = accepted`
+  - `validation_version = r3_full_sequence_v3`
+- unresolved doc rows may be excluded, but the summary must record those exclusions explicitly
+- `manifest.json`
+- `config.json`
 
 ## Post-Run Sequence
 
-1. collect the train log
-2. save `valid_predictions.csv`, `grounded_holdout_predictions.csv`, and `edge_safety_holdout_predictions.csv`
-3. run `generate_post_train_prediction_sets.py`
-4. make sure prediction generation used row metadata and cited document context, not just the raw question
+1. verify `train.log`, `checkpoints/`, and `final/` exist
+2. generate `valid_predictions.csv`
+3. generate `grounded_holdout_predictions.csv`
+4. generate `edge_safety_holdout_predictions.csv`
 5. run `evaluate_post_finetuning_run.py`
-6. summarize valid performance
-7. summarize grounded holdout performance
-8. summarize edge safety holdout performance
-9. compare with pre-finetuning baseline
-10. decide one of:
-   - promote this run as the new baseline
-   - keep as experiment only
-   - return to `03/05` if safety or grounded quality regresses
+6. summarize valid quality
+7. summarize grounded holdout quality
+8. summarize edge safety quality
+9. compare with:
+   - pre-finetuning baseline
+   - `baseline-gemma4-2b-r2`
+10. classify:
+   - `reject`
+   - `experiment_only`
+   - `next_baseline`
 
 ## Stop Conditions
 
-Stop the run and report if:
+Stop and report if:
 
-- the frozen input files do not match the manifest
-- the output directory already exists with another run id
-- the training process cannot write logs or checkpoints
-- post-train evaluation cannot be produced
+- contextual JSONL row counts do not match the frozen split
+- excluded no-context rows are not reported clearly in the summary
+- any contextual row has empty input or empty output
+- full training sequence budget is exceeded
+- contextual summary is missing or not accepted
+- the output directory already exists for another run
+- training cannot write logs or checkpoints
+- post-train predictions cannot be produced
+
+## Approval Prompts
+
+Training:
+
+`baseline-gemma4-2b-r3`를 context-aware schema v1 기준으로 학습해도 될까요? frozen stage05 inputs는 유지하고, stage06 run-local training view만 새로 만들겠습니다.
+
+Prediction generation:
+
+`r3` final 모델로 valid, grounded holdout, edge safety holdout prediction을 생성해도 될까요? row metadata와 cited doc context를 포함한 context-aware prompt를 사용하겠습니다.
+
+Gate evaluation:
+
+`r3` post-train gate를 실행해도 될까요? 기존 evaluator는 유지하고, 이번 라운드는 verdict와 blocker만 판정하겠습니다.

@@ -11,6 +11,35 @@
 
 - `02_gemma4_generation`
 
+## Serviceization Direction
+
+This repository should be readable not only as a data pipeline project, but also as an
+`AI Application Engineer / AI Service Engineer` portfolio project.
+
+The current strengths are already clear:
+
+- data collection and preprocessing contracts
+- retrieval-first real estate QA structure
+- evaluation and edge-case coverage
+- finetuning readiness and post-train comparison flow
+
+The main gap is not another modeling stage. The main gap is product evidence:
+
+- API-facing usage path
+- deployable demo flow
+- logging and traceability
+- reviewer or admin evaluation loop
+- operator-facing runbooks for failure handling
+
+When extending this repository, prefer changes that preserve the current stage-based
+data contracts while making the system easier to present as a service:
+
+- keep the current preprocessing, generation, optimization, and finetuning stages
+- add service-facing wrappers around existing query and evaluation logic
+- make logs, reports, and run artifacts easy to inspect
+- document request and response contracts plus deployment steps
+- treat post-train validation as both model evaluation and service-readiness evidence
+
 ## Current Status
 
 지금까지 정리된 핵심 상태는 아래와 같습니다.
@@ -260,8 +289,21 @@ python ./02_gemma4_generation/verify_local_inference_setup.py
 ### Prepare a finetuning run manifest
 
 ```powershell
-& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\create_run_manifest.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\create_run_manifest.py --run-id baseline-gemma4-2b-r1 --model gemma4_2b --context-mode auto
 ```
+
+### Prepare an unattended finetuning run
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\06_finetuning\prepare_unattended_finetuning_run.py --run-id baseline-gemma4-2b-r5 --model gemma4_2b --context-mode contextual --training-scope gates_and_norms --max-seq-length 512
+```
+
+This preflight command refreshes readiness, validates the frozen JSONL contract, prepares
+optional run-local contextual assets, creates `manifest.json`, checks the local environment,
+and writes launch commands plus a numbered report before the long unattended run.
+
+Stage 06 run outputs are project-local only. Keep `--run-dir` and `--output-dir` inside this
+repository when using the manifest or unattended preflight tooling.
 
 ### Run the baseline finetuning job
 
@@ -310,6 +352,18 @@ re-runs stage 04 metrics, regenerates stage 05 finetuning prep outputs, and refr
 & 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend mock --model gemma4_2b --host 127.0.0.1 --port 8787
 & 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\demo_chatbot_web_mvp.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8787
 ```
+
+### FastAPI service
+
+```powershell
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\fastapi_app.py --backend mock --model gemma4_2b --host 127.0.0.1 --port 8788
+& 'C:\Users\lwwde\miniconda3\envs\py312\python.exe' .\02_gemma4_generation\fastapi_app.py --backend transformers --model gemma4_2b --host 127.0.0.1 --port 8788
+```
+
+- FastAPI is the service-facing API path for the current grounded QA runtime.
+- Public v1 endpoints are `GET /api/status`, `POST /api/ask`, `POST /api/check-rule`, and `POST /api/check-generation-ready`.
+- JSONL request logs are written to `logs/api_requests/fastapi_YYYYMMDD.jsonl`.
+- The existing web demo remains available as a separate local UI path.
 
 - Web demo 상단 카드에서 데이터 포함 지역(`서울권`, `경기권`, `인천권`)과 포함된 `시군구`를 확인할 수 있습니다.
 - `규칙기반 답변 확인`은 고정 질문 `데이터 기준 알려줘`로 빠른 계약 기반 응답 경로를 점검합니다.

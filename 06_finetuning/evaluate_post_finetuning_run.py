@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--run-dir", default=None)
+    parser.add_argument("--stop-signal-path", default=None)
     return parser.parse_args()
 
 
@@ -242,6 +243,7 @@ def classify_run(integrity_ok: bool, valid_eval: dict[str, Any], grounded_eval: 
 def main() -> None:
     args = parse_args()
     run_dir = Path(args.run_dir) if args.run_dir else build_run_dir(args.run_id)
+    stop_signal_path = Path(args.stop_signal_path) if args.stop_signal_path else run_dir / "post_train_gate.stop"
     manifest_path = run_dir / "manifest.json"
     config_path = run_dir / "config.json"
     train_log_path = run_dir / "train.log"
@@ -287,6 +289,9 @@ def main() -> None:
     grounded_predictions = load_csv(grounded_predictions_path)
     safety_predictions = load_csv(safety_predictions_path)
 
+    if stop_signal_path.exists():
+        raise RuntimeError(f"stop signal detected before gate execution: {stop_signal_path}")
+
     valid_joined, valid_issues = join_on_source_row_index(valid_predictions, baseline_valid, "valid")
     grounded_joined, grounded_issues = join_on_source_row_index(grounded_predictions, baseline_grounded, "grounded_holdout")
     safety_joined, safety_issues = join_on_source_row_index(safety_predictions, baseline_safety, "edge_safety_holdout")
@@ -300,9 +305,15 @@ def main() -> None:
     valid_baseline_joined, _ = join_on_source_row_index(baseline_valid.copy(), baseline_valid, "baseline_valid")
     valid_baseline = evaluate_eval_subset(valid_baseline_joined)
 
+    if stop_signal_path.exists():
+        raise RuntimeError(f"stop signal detected after valid evaluation: {stop_signal_path}")
+
     grounded_current = evaluate_edge_subset(grounded_joined)
     grounded_baseline_joined, _ = join_on_source_row_index(baseline_grounded.copy(), baseline_grounded, "baseline_grounded")
     grounded_baseline_eval = evaluate_edge_subset(grounded_baseline_joined)
+
+    if stop_signal_path.exists():
+        raise RuntimeError(f"stop signal detected after grounded holdout evaluation: {stop_signal_path}")
 
     safety_current = evaluate_edge_subset(safety_joined)
     safety_baseline_joined, _ = join_on_source_row_index(baseline_safety.copy(), baseline_safety, "baseline_safety")
